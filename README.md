@@ -9,7 +9,7 @@ Live: https://isuru-rana.github.io/electronics-animations/
 | `semiconductor-sim.html` | Conductor vs insulator, silicon, doping, PN junction, forward and reverse bias (6 scenes) |
 | `fullwave-ct-sim.html` | Centre tap full wave rectifier: current path per half cycle, input and output graphs, open D2 fault |
 | `bridge-sim.html` | Bridge rectifier: diode pairs per half cycle, input and output graphs, open D3 fault |
-| `transistor-tap-sim.html` | NPN transistor next to a hydraulic water transistor (spring-loaded flap): cut-off, active, saturation |
+| `transistor-tap-sim.html` | NPN transistor next to a water tap: cut-off, active, saturation |
 | `diode-meter-sim.html` | Diode knee voltage circuit; how a voltmeter reads the difference between red and COM |
 
 ## Controls
