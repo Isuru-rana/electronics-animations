@@ -1,0 +1,303 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Transistor as a Tap</title>
+<style>
+  :root { --bg:#f6f7fb; --panel:#ffffff; --ink:#1a2233; --muted:#5b6478; --accent:#1f6fd6; }
+  * { box-sizing:border-box; }
+  html,body { margin:0; height:100%; background:var(--bg); color:var(--ink);
+    font-family:"Segoe UI", Roboto, Arial, sans-serif; overflow:hidden; }
+  #wrap { position:absolute; inset:0; display:flex; flex-direction:column; }
+  #stage { flex:1; position:relative; }
+  canvas { position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); }
+  #bar { display:flex; gap:12px; align-items:center; flex-wrap:wrap; padding:10px 16px;
+    background:var(--panel); border-top:1px solid #dfe3ea; font-size:15px; }
+  #bar label { color:var(--muted); }
+  input[type=range] { width:320px; accent-color:var(--accent); }
+  button { background:#eef1f6; color:var(--ink); border:1px solid #cfd5e0; border-radius:6px;
+    padding:7px 12px; font-size:14px; cursor:pointer; }
+  button:hover { background:#e2e7f0; }
+  #vin { font-weight:700; min-width:64px; }
+  .sp { flex:1; }
+  .keys { color:var(--muted); font-size:12px; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div id="stage"><canvas id="c"></canvas></div>
+  <div id="bar">
+    <label for="pot">Base voltage (pot)</label>
+    <input id="pot" type="range" min="0" max="500" value="0">
+    <span id="vin">0.00 V</span>
+    <button id="b0">Cut-off</button>
+    <button id="b1">Active</button>
+    <button id="b2">Saturation</button>
+    <span class="sp"></span>
+    <span class="keys">Left / Right: turn &nbsp; 1 2 3: regions &nbsp; F: fullscreen</span>
+  </div>
+</div>
+<script>
+"use strict";
+// ---------- model: 2N3904, R_B 10k from pot, LED + 330 ohm from 9 V ----------
+const VCC = 9, RB = 10000, RC = 330, VLED = 2.0, VBE = 0.7, VCESAT = 0.2, BETA = 100;
+const ISAT = (VCC - VLED - VCESAT) / RC;                    // max collector current
+function solve(vin) {
+  const ib = Math.max(0, (vin - VBE) / RB);
+  const ic = Math.min(BETA * ib, ISAT);
+  const region = ib <= 0 ? 0 : BETA * ib >= ISAT ? 2 : 1;
+  const vce = region === 2 ? VCESAT : VCC - VLED * (ic > 0 ? 1 : 0) - ic * RC;
+  return { vin, ib, ic, ie: ib + ic, vce: ic > 0 ? vce : VCC - 0, region, flow: ic / ISAT,
+           turn: Math.min(1, ib / 0.00043) };
+}
+
+// ---------- canvas ----------
+const W = 1400, H = 760;
+const cv = document.getElementById("c"), ctx = cv.getContext("2d");
+function fit() {
+  const st = document.getElementById("stage");
+  const s = Math.min(st.clientWidth / W, st.clientHeight / H), dpr = window.devicePixelRatio || 1;
+  cv.style.width = W * s + "px"; cv.style.height = H * s + "px";
+  cv.width = W * s * dpr; cv.height = H * s * dpr; ctx.setTransform(s * dpr, 0, 0, s * dpr, 0, 0);
+}
+window.addEventListener("resize", fit);
+
+const INK = "#1a2233", MUTED = "#5b6478", WIRE = "#4a5468", GRID = "#e1e5ec";
+const CB = "#e07a00", CC = "#1f6fd6", WATER = "#3d9be9", METAL = "#9aa3b2", METAL_D = "#6b7383";
+const REG = [["CUT-OFF", "#5b6478"], ["ACTIVE", "#1f6fd6"], ["SATURATION", "#18a058"]];
+
+function text(t, x, y, size, color, align = "center", weight = "normal") {
+  ctx.fillStyle = color; ctx.font = `${weight} ${size}px Segoe UI, Arial`;
+  ctx.textAlign = align; ctx.textBaseline = "middle"; ctx.fillText(t, x, y);
+}
+function sub(main, s, x, y, size, color, align = "left") {
+  ctx.font = `bold ${size}px Segoe UI, Arial`; const w1 = ctx.measureText(main).width;
+  ctx.font = `bold ${size * 0.62}px Segoe UI, Arial`; const w2 = ctx.measureText(s).width;
+  const x0 = align === "center" ? x - (w1 + w2) / 2 : align === "right" ? x - w1 - w2 : x;
+  ctx.fillStyle = color; ctx.textAlign = "left"; ctx.textBaseline = "middle";
+  ctx.font = `bold ${size}px Segoe UI, Arial`; ctx.fillText(main, x0, y);
+  ctx.font = `bold ${size * 0.62}px Segoe UI, Arial`; ctx.fillText(s, x0 + w1 + 1, y + size * 0.3);
+  return x0 + w1 + w2 + 2;
+}
+function poly(pts, color, w = 4) {
+  ctx.strokeStyle = color; ctx.lineWidth = w; ctx.lineCap = "round"; ctx.lineJoin = "round";
+  ctx.beginPath(); ctx.moveTo(pts[0][0], pts[0][1]); for (const p of pts.slice(1)) ctx.lineTo(p[0], p[1]); ctx.stroke();
+}
+function roundRect(x, y, w, h, r) {
+  ctx.beginPath(); ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath();
+}
+function arrow(x0, y0, x1, y1, color, w) {
+  const a = Math.atan2(y1 - y0, x1 - x0), h = 8 + w * 1.6;
+  ctx.strokeStyle = color; ctx.fillStyle = color; ctx.lineWidth = w; ctx.lineCap = "butt";
+  ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(x1 - Math.cos(a) * h * 0.8, y1 - Math.sin(a) * h * 0.8); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x1 - Math.cos(a - 0.45) * h, y1 - Math.sin(a - 0.45) * h);
+  ctx.lineTo(x1 - Math.cos(a + 0.45) * h, y1 - Math.sin(a + 0.45) * h); ctx.closePath(); ctx.fill();
+}
+
+// ================= LEFT: the tap =================
+const drops = [];
+function drawTap(s, dt) {
+  text("The water tap", 330, 36, 24, INK, "center", "bold");
+  // tank
+  ctx.fillStyle = "#dbeafa"; ctx.strokeStyle = METAL_D; ctx.lineWidth = 3;
+  roundRect(50, 80, 170, 130, 10); ctx.fill(); ctx.stroke();
+  ctx.fillStyle = WATER; ctx.fillRect(53, 112, 164, 95);
+  text("water supply", 135, 98, 15, MUTED);
+  text("(pressure)", 135, 160, 15, "#ffffff", "center", "bold");
+  // supply pipe: tank down, narrow section, to valve
+  ctx.fillStyle = METAL; ctx.fillRect(122, 210, 28, 70);              // down
+  ctx.fillRect(122, 262, 90, 28);                                     // to the right
+  ctx.fillRect(212, 268, 40, 16);                                     // narrow section
+  ctx.fillRect(252, 262, 30, 28);
+  ctx.fillStyle = WATER; ctx.globalAlpha = 0.85;
+  ctx.fillRect(128, 210, 16, 66); ctx.fillRect(128, 268, 84, 16); ctx.fillRect(212, 272, 40, 8); ctx.fillRect(252, 268, 30, 16);
+  ctx.globalAlpha = 1;
+  ctx.strokeStyle = "#18a058"; ctx.lineWidth = 2; ctx.setLineDash([4, 3]); ctx.strokeRect(206, 258, 52, 36); ctx.setLineDash([]);
+  text("narrow pipe", 232, 312, 14, "#18a058", "center", "bold");
+  sub("= R", "C", 232, 330, 14, "#18a058", "center");
+  // valve body
+  ctx.fillStyle = METAL; ctx.strokeStyle = METAL_D; ctx.lineWidth = 3;
+  roundRect(282, 250, 110, 56, 12); ctx.fill(); ctx.stroke();
+  // inner gate (rises as handle turns)
+  const gateY = 252 + 50 * (1 - s.turn);
+  ctx.fillStyle = METAL_D; ctx.fillRect(330, 252, 14, Math.max(0, gateY - 252));
+  // stem and handle
+  ctx.fillStyle = METAL_D; ctx.fillRect(331, 206, 12, 46);
+  const hx = 337, hy = 200, ang = -s.turn * Math.PI / 2;
+  ctx.save(); ctx.translate(hx, hy); ctx.rotate(ang);
+  ctx.fillStyle = "#d93636"; roundRect(-70, -10, 140, 20, 10); ctx.fill();
+  ctx.fillStyle = "#fff"; ctx.beginPath(); ctx.arc(0, 0, 6, 0, 7); ctx.fill();
+  ctx.restore();
+  // turning effort arrow (base current)
+  if (s.ib > 0) { const w = 2 + 6 * Math.min(1, s.ib / 0.00043);
+    ctx.strokeStyle = CB; ctx.lineWidth = w; ctx.beginPath(); ctx.arc(hx, hy, 92, -Math.PI * 0.95, -Math.PI * 0.62); ctx.stroke();
+    const ex = hx + 92 * Math.cos(-Math.PI * 0.62), ey = hy + 92 * Math.sin(-Math.PI * 0.62);
+    arrow(ex - 10, ey - 6, ex + 4, ey + 2, CB, w); }
+  // spout
+  ctx.fillStyle = METAL; ctx.strokeStyle = METAL_D; ctx.lineWidth = 3;
+  ctx.fillRect(392, 262, 70, 28); ctx.fillRect(440, 262, 28, 70);
+  roundRect(434, 326, 40, 14, 4); ctx.fill(); ctx.stroke();
+  // water stream
+  const f = s.flow, sx = 454, top = 340, bottom = 610;
+  if (f > 0.001) {
+    const w = 4 + 26 * f;
+    const g = ctx.createLinearGradient(0, top, 0, bottom); g.addColorStop(0, WATER); g.addColorStop(1, "#7cc0f5");
+    ctx.fillStyle = g; ctx.globalAlpha = 0.75;
+    ctx.beginPath(); ctx.moveTo(sx - w / 2, top); ctx.lineTo(sx + w / 2, top); ctx.lineTo(sx + w / 2 + 3, bottom); ctx.lineTo(sx - w / 2 - 3, bottom); ctx.fill();
+    ctx.globalAlpha = 1;
+    // falling drops
+    const rate = 60 * f;
+    if (Math.random() < rate * dt) drops.push({ x: sx + (Math.random() - 0.5) * w * 0.8, y: top, v: 120 });
+  }
+  for (const d of drops) { d.v += 900 * dt; d.y += d.v * dt; }
+  while (drops.length && drops[0].y > bottom) drops.shift();
+  ctx.fillStyle = "#1f6fd6"; for (const d of drops) { ctx.beginPath(); ctx.ellipse(d.x, d.y, 3, 5, 0, 0, 7); ctx.fill(); }
+  // bucket
+  ctx.fillStyle = "#e8edf4"; ctx.strokeStyle = METAL_D; ctx.lineWidth = 3;
+  ctx.beginPath(); ctx.moveTo(380, 600); ctx.lineTo(528, 600); ctx.lineTo(512, 690); ctx.lineTo(396, 690); ctx.closePath(); ctx.fill(); ctx.stroke();
+  // labels mapping to the transistor
+  const lab = (t1, t2, x, y, col) => { text(t1, x, y, 18, col, "left", "bold"); text(t2, x, y + 22, 14, MUTED, "left"); };
+  lab("Collector (C)", "water comes in", 20, 330, CC);
+  lab("Base (B)", "small turn on the handle", 470, 140, CB);
+  lab("Emitter (E)", "water goes out", 540, 380, "#2f4f7f");
+  // flow gauge
+  text(f <= 0.001 ? "No flow" : f >= 0.999 ? "Full flow: the narrow pipe limits it" : "Flow " + Math.round(f * 100) + "%",
+       330, 725, 18, f >= 0.999 ? "#18a058" : f <= 0.001 ? MUTED : CC, "center", "bold");
+  if (s.region === 0 && s.vin > 0.05) text("handle is stiff: needs a push before it moves", 330, 670 - 300, 14, MUTED);
+}
+
+// ================= RIGHT: the transistor circuit =================
+const QX = 1060, QY = 380;                          // base bar centre
+const CX = 1100, CTOP = 330, ETOP = 430, GY = 560, VX = 800, RB0 = 880, RB1 = 990;
+const PB = [[VX, 426], [VX, QY], [RB0, QY], [QX, QY], [QX, QY + 12], [CX, ETOP], [CX, GY], [VX, GY], [VX, 494]];
+const PC = [[CX, 70], [CX, CTOP], [QX, QY - 12], [QX, QY + 12], [CX, ETOP], [CX, GY]];
+const plen = p => p.slice(1).reduce((a, q, k) => a + Math.hypot(q[0] - p[k][0], q[1] - p[k][1]), 0);
+function at(p, d) { for (let k = 1; k < p.length; k++) { const l = Math.hypot(p[k][0] - p[k - 1][0], p[k][1] - p[k - 1][1]);
+  if (d <= l) return [p[k - 1][0] + (p[k][0] - p[k - 1][0]) * d / l, p[k - 1][1] + (p[k][1] - p[k - 1][1]) * d / l]; d -= l; } return p[p.length - 1]; }
+let phB = 0, phC = 0;
+function drawCircuit(s, dt) {
+  text("The transistor (NPN)", 1050, 36, 24, INK, "center", "bold");
+  const onB = s.ib > 0, onC = s.ic > 1e-6;
+  const cB = onB ? CB : WIRE, cC = onC ? CC : WIRE;
+  // supply rail
+  text("+9 V", CX, 58, 18, "#d93636", "center", "bold");
+  poly([[CX, 70], [CX, 100]], cC);
+  // LED
+  const glow = Math.min(1, s.ic / ISAT);
+  if (glow > 0.02) { const g = ctx.createRadialGradient(CX, 130, 4, CX, 130, 70);
+    g.addColorStop(0, `rgba(255,40,40,${0.55 * glow})`); g.addColorStop(1, "rgba(255,40,40,0)"); ctx.fillStyle = g; ctx.beginPath(); ctx.arc(CX, 130, 70, 0, 7); ctx.fill(); }
+  ctx.fillStyle = glow > 0.02 ? `rgb(${200 + 55 * glow},${60 - 40 * glow},${60 - 40 * glow})` : "#c9a3a3";
+  ctx.beginPath(); ctx.moveTo(CX - 20, 112); ctx.lineTo(CX + 20, 112); ctx.lineTo(CX, 146); ctx.closePath(); ctx.fill();
+  ctx.strokeStyle = INK; ctx.lineWidth = 4; ctx.beginPath(); ctx.moveTo(CX - 22, 148); ctx.lineTo(CX + 22, 148); ctx.stroke();
+  poly([[CX, 100], [CX, 112]], cC); poly([[CX, 148], [CX, 190]], cC);
+  text("LED", CX + 42, 128, 16, MUTED, "left");
+  // R_C
+  ctx.strokeStyle = cC; ctx.lineWidth = 4; ctx.beginPath(); ctx.moveTo(CX, 190);
+  for (let k = 0; k < 8; k++) ctx.lineTo(CX + (k % 2 ? -13 : 13), 190 + 80 / 8 * (k + 0.5)); ctx.lineTo(CX, 270); ctx.stroke();
+  poly([[CX, 270], [CX, CTOP]], cC);
+  sub("R", "C", CX + 26, 222, 18, INK); text("330 Ω", CX + 28, 248, 15, MUTED, "left");
+  // transistor body
+  ctx.strokeStyle = MUTED; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(QX + 18, QY, 52, 0, 7); ctx.stroke();
+  ctx.strokeStyle = INK; ctx.lineWidth = 7; ctx.beginPath(); ctx.moveTo(QX, QY - 30); ctx.lineTo(QX, QY + 30); ctx.stroke();
+  poly([[QX, QY - 12], [CX, CTOP + 18], [CX, CTOP]], cC);
+  poly([[QX, QY + 12], [CX, ETOP - 18], [CX, ETOP]], onC || onB ? CC : WIRE);
+  arrow(QX + 18, QY + 24, CX - 4, ETOP - 20, onC || onB ? CC : WIRE, 3);
+  text("C", CX + 18, CTOP + 6, 18, CC, "left", "bold");
+  text("E", CX + 18, ETOP - 4, 18, "#2f4f7f", "left", "bold");
+  text("B", QX - 18, QY - 26, 18, CB, "center", "bold");
+  text("2N3904", QX - 30, QY + 62, 14, MUTED);
+  poly([[CX, ETOP], [CX, GY]], onC || onB ? CC : WIRE);
+  // base side: pot source, R_B
+  poly([[VX, QY], [RB0, QY]], cB);
+  ctx.strokeStyle = cB; ctx.lineWidth = 4; ctx.beginPath(); ctx.moveTo(RB0, QY);
+  for (let k = 0; k < 8; k++) ctx.lineTo(RB0 + (RB1 - RB0) / 8 * (k + 0.5), QY + (k % 2 ? 12 : -12)); ctx.lineTo(RB1, QY); ctx.stroke();
+  poly([[RB1, QY], [QX, QY]], cB);
+  sub("R", "B", (RB0 + RB1) / 2 - 12, QY - 34, 18, INK); text("10 kΩ", (RB0 + RB1) / 2, QY + 32, 15, MUTED);
+  // variable source
+  ctx.fillStyle = "#fff"; ctx.strokeStyle = WIRE; ctx.lineWidth = 4; ctx.beginPath(); ctx.arc(VX, 460, 34, 0, 7); ctx.fill(); ctx.stroke();
+  text("+", VX, 446, 20, "#d93636", "center", "bold"); text("−", VX, 476, 20, "#2f6fd6", "center", "bold");
+  arrow(VX - 40, 500, VX + 40, 420, MUTED, 2);
+  poly([[VX, QY], [VX, 426]], cB); poly([[VX, 494], [VX, GY]], WIRE);
+  sub("V", "in", VX - 64, 448, 18, INK, "center"); text(s.vin.toFixed(2) + " V", VX - 64, 474, 16, CB, "center", "bold");
+  text("pot", VX - 64, 498, 14, MUTED);
+  // ground
+  poly([[VX, GY], [CX, GY]], WIRE);
+  const gx = 950; ctx.strokeStyle = INK; ctx.lineWidth = 3;
+  ctx.beginPath(); ctx.moveTo(gx, GY); ctx.lineTo(gx, GY + 18); ctx.stroke();
+  [[22, 18], [14, 26], [6, 34]].forEach(([w, y]) => { ctx.beginPath(); ctx.moveTo(gx - w, GY + y); ctx.lineTo(gx + w, GY + y); ctx.stroke(); });
+  // current dots: base (small, orange), collector (big, blue)
+  const SPB = 40, SPC = 22;
+  phB = (phB + 160 * Math.sqrt(s.ib / 0.00043) * dt) % SPB;
+  phC = (phC + 220 * Math.sqrt(s.ic / ISAT) * dt) % SPC;
+  if (onB) { const L = plen(PB); for (let d = phB; d < L; d += SPB) { const [x, y] = at(PB, d);
+    ctx.fillStyle = CB; ctx.beginPath(); ctx.arc(x, y, 4.5, 0, 7); ctx.fill(); } }
+  if (onC) { const L = plen(PC); for (let d = phC; d < L; d += SPC) { const [x, y] = at(PC, d);
+    ctx.fillStyle = CC; ctx.beginPath(); ctx.arc(x, y, 7, 0, 7); ctx.fill(); ctx.strokeStyle = "#fff"; ctx.lineWidth = 2; ctx.stroke(); } }
+}
+
+// ---------- readings and region ----------
+function drawReadings(s) {
+  const x = 1190, y = 150, w = 190;
+  ctx.fillStyle = "#fff"; ctx.strokeStyle = "#dfe3ea"; ctx.lineWidth = 1.5; roundRect(x, y, w, 300, 10); ctx.fill(); ctx.stroke();
+  const ua = v => (v * 1e6).toFixed(0) + " µA", ma = v => (v * 1e3).toFixed(1) + " mA";
+  const rows = [["I", "B", ua(s.ib), CB], ["I", "C", ma(s.ic), CC], ["I", "E", ma(s.ie), "#2f4f7f"],
+                ["V", "BE", (s.ib > 0 ? 0.70 : Math.min(s.vin, 0.7)).toFixed(2) + " V", INK], ["V", "CE", s.vce.toFixed(2) + " V", INK]];
+  rows.forEach((r, k) => { const yy = y + 32 + k * 50;
+    sub(r[0], r[1], x + 16, yy, 20, r[3]); text(r[2], x + w - 14, yy, 20, r[3], "right", "bold"); });
+  text("β = 100", x + w / 2, y + 278, 15, MUTED);
+  // I_C = beta I_B line
+  const by = 480;
+  ctx.fillStyle = "#fff"; roundRect(x, by, w, 104, 10); ctx.fill(); ctx.stroke();
+  let e = sub("I", "C", x + 16, by + 28, 19, CC); text(" = β ×", e + 22, by + 26, 18, INK, "left");
+  sub("I", "B", e + 72, by + 28, 19, CB);
+  const want = BETA * s.ib;
+  text(s.region === 2 ? "would be " + (want * 1e3).toFixed(0) + " mA" : (s.ib > 0 ? "100 × " + (s.ib * 1e6).toFixed(0) + " µA" : "0"), x + w / 2, by + 60, 14, MUTED);
+  text(s.region === 2 ? "limited to " + (ISAT * 1e3).toFixed(1) + " mA" : "= " + (s.ic * 1e3).toFixed(1) + " mA", x + w / 2, by + 84, 15, s.region === 2 ? "#18a058" : CC, "center", "bold");
+
+  // region bar across the bottom
+  const rx = 700, ry = 640, rw = 680;
+  REG.forEach(([name, col], k) => { const xx = rx + k * rw / 3, on = s.region === k;
+    ctx.fillStyle = on ? col : "#eef1f6"; roundRect(xx + 4, ry, rw / 3 - 8, 46, 8); ctx.fill();
+    text(name, xx + rw / 6, ry + 23, 18, on ? "#fff" : MUTED, "center", "bold"); });
+  const notes = ["Base below 0.7 V: no base current, tap closed, LED off",
+                 "Small base current controls a 100× bigger collector current",
+                 "Base current is more than enough: fully on, LED at full brightness"];
+  text(notes[s.region], rx + rw / 2, ry + 76, 16, REG[s.region][1], "center", "bold");
+  // same thing on the tap side
+  const tapNotes = ["Handle closed", "Handle part open", "Handle fully open"];
+  text(tapNotes[s.region], 330, 70, 16, REG[s.region][1], "center", "bold");
+}
+
+// ---------- loop ----------
+const pot = document.getElementById("pot"), vinLabel = document.getElementById("vin");
+let state = solve(0), last = performance.now();
+function setPot(v) { pot.value = v; state = solve(pot.value / 100); vinLabel.textContent = state.vin.toFixed(2) + " V"; }
+function frame(now) {
+  const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  ctx.fillStyle = "#f6f7fb"; ctx.fillRect(0, 0, W, H);
+  ctx.strokeStyle = "#dfe3ea"; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(670, 20); ctx.lineTo(670, 740); ctx.stroke();
+  text("=", 670, 380, 40, "#b8bfcc", "center", "bold");
+  drawTap(state, dt);
+  drawCircuit(state, dt);
+  drawReadings(state);
+  requestAnimationFrame(frame);
+}
+pot.addEventListener("input", () => setPot(pot.value));
+const $ = id => document.getElementById(id);
+$("b0").onclick = () => setPot(40);
+$("b1").onclick = () => setPot(180);
+$("b2").onclick = () => setPot(450);
+window.addEventListener("keydown", e => {
+  if (e.key === "ArrowRight") setPot(Math.min(500, +pot.value + 5));
+  else if (e.key === "ArrowLeft") setPot(Math.max(0, +pot.value - 5));
+  else if (e.key === "1") $("b0").click(); else if (e.key === "2") $("b1").click(); else if (e.key === "3") $("b2").click();
+  else if (e.key === "f" || e.key === "F") { document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen(); }
+  else return;
+  if (document.activeElement && document.activeElement.tagName === "BUTTON") document.activeElement.blur();
+});
+fit(); setPot(0); requestAnimationFrame(frame);
+</script>
+</body>
+</html>

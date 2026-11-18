@@ -9,6 +9,7 @@ Live: https://isuru-rana.github.io/electronics-animations/
 | `semiconductor-sim.html` | Conductor vs insulator, silicon, doping, PN junction, forward and reverse bias (6 scenes) |
 | `fullwave-ct-sim.html` | Centre tap full wave rectifier: current path per half cycle, input and output graphs, open D2 fault |
 | `bridge-sim.html` | Bridge rectifier: diode pairs per half cycle, input and output graphs, open D3 fault |
+| `transistor-tap-sim.html` | NPN transistor next to a water tap: cut-off, active, saturation |
 | `diode-meter-sim.html` | Diode knee voltage circuit; how a voltmeter reads the difference between red and COM |
 
 ## Controls
@@ -18,6 +19,8 @@ Live: https://isuru-rana.github.io/electronics-animations/
 **Diode meter sim:** Left / Right: pot. R: record point. C: voltage colours. F: fullscreen. Drag any probe tip to a node dot.
 
 **Full wave and bridge sims:** Space: pause. Right: step. F: fullscreen. Speed slider slows or speeds the 50 Hz cycle.
+
+**Transistor tap sim:** Left / Right: base voltage. 1, 2, 3: cut-off, active, saturation. F: fullscreen.
 
 ## Offline use
 
