@@ -317,9 +317,6 @@ function drawGraph(r) {
     ctx.strokeStyle = BAD; ctx.beginPath(); ctx.moveTo(GX0, gy(izm)); ctx.lineTo(GX1, gy(izm)); ctx.stroke();
   }
   ctx.setLineDash([]);
-  ctx.font = "bold 14px Segoe UI, Arial"; const wz = ctx.measureText("5.1 V").width;
-  ctx.fillStyle = "#fff"; ctx.fillRect(gx(VZ) - 40 - wz, gy(IMAX * 0.55) - 12, wz + 34, 26);
-  sub("V", "Z", gx(VZ) - 14 - wz, gy(IMAX * 0.55), 16, CZ, "right"); text("5.1 V", gx(VZ) - 10, gy(IMAX * 0.55), 14, CZ, "right", "bold");
   if (izm < IMAX) { ctx.fillStyle = "rgba(217,54,54,0.07)"; ctx.fillRect(GX0, gy(izm), GX1 - GX0, GY1 - gy(izm));
     const e = sub("I", "ZM", gx(VZ) + 22, gy(izm) + 16, 15, BAD, "left");
     text(" " + Math.round(izm * 1000) + " mA: 1 W limit, more burns it", e, gy(izm) + 16, 14, BAD, "left", "bold"); }
@@ -355,6 +352,9 @@ function drawGraph(r) {
     const tx = Math.max(GX0 + 90, Math.min(GX1 - 110, px - 110)), ty = py + 34 > GY1 - 10 ? py - 30 : py + 34;
     tag(f2(r.vo) + " V, " + mA(r.iz), tx, ty, burnt ? "#2a2a2a" : LOADS[load].col);
   }
+  ctx.font = "bold 14px Segoe UI, Arial"; const wz = ctx.measureText("5.1 V").width;
+  ctx.fillStyle = "#fff"; ctx.fillRect(gx(VZ) - 40 - wz, gy(IMAX * 0.55) - 12, wz + 34, 26);
+  sub("V", "Z", gx(VZ) - 14 - wz, gy(IMAX * 0.55), 16, CZ, "right"); text("5.1 V", gx(VZ) - 10, gy(IMAX * 0.55), 14, CZ, "right", "bold");
 }
 
 // ---------- table (matches the worksheet) ----------
