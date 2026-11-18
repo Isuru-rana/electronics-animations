@@ -1,0 +1,299 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bridge Rectifier</title>
+<style>
+  :root { --bg:#f6f7fb; --panel:#ffffff; --ink:#1a2233; --muted:#5b6478; --accent:#1f6fd6; }
+  * { box-sizing:border-box; }
+  html,body { margin:0; height:100%; background:var(--bg); color:var(--ink);
+    font-family:"Segoe UI", Roboto, Arial, sans-serif; overflow:hidden; }
+  #wrap { position:absolute; inset:0; display:flex; flex-direction:column; }
+  #stage { flex:1; position:relative; }
+  canvas { position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); }
+  #bar { display:flex; gap:10px; align-items:center; flex-wrap:wrap; padding:10px 16px;
+    background:var(--panel); border-top:1px solid #dfe3ea; font-size:15px; }
+  #bar label { color:var(--muted); }
+  input[type=range] { width:200px; accent-color:var(--accent); }
+  button { background:#eef1f6; color:var(--ink); border:1px solid #cfd5e0; border-radius:6px;
+    padding:7px 12px; font-size:14px; cursor:pointer; }
+  button:hover { background:#e2e7f0; }
+  button.on { background:#e6f4d7; border-color:#7fb24a; }
+  button.warn { background:#fde2e2; border-color:#d93636; }
+  .sp { flex:1; }
+  .keys { color:var(--muted); font-size:12px; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div id="stage"><canvas id="c"></canvas></div>
+  <div id="bar">
+    <button id="play" class="on">Pause (Space)</button>
+    <label for="spd">Speed</label>
+    <input id="spd" type="range" min="5" max="200" value="40">
+    <button id="step">Step</button>
+    <button id="d2">Open D3 (fault)</button>
+    <button id="rst">Reset</button>
+    <span class="sp"></span>
+    <span class="keys">Space: pause &nbsp; Right: step &nbsp; F: fullscreen &nbsp; Slow motion of 50 Hz</span>
+  </div>
+</div>
+<script>
+"use strict";
+// ---------- model: 230 V to 12 V, 4 x 1N4007 bridge, R_L 1k ----------
+const VRMS = 12, VP = VRMS * Math.SQRT2, VF = 0.7, VF2 = 2 * VF, RL = 1000, F = 50, T = 1 / F;
+let d2Open = false;   // true = D3 open
+const vsec = t => VP * Math.sin(2 * Math.PI * F * t);        // top end relative to bottom end
+function out(t) {
+  const v = vsec(t);
+  if (v > VF2) return { v: v - VF2, d: 1 };
+  if (-v > VF2 && !d2Open) return { v: -v - VF2, d: 2 };
+  return { v: 0, d: 0 };
+}
+const vDC = () => (d2Open ? 1 : 2) * (VP - VF2) / Math.PI;
+
+// ---------- canvas ----------
+const W = 1400, H = 760;
+const cv = document.getElementById("c"), ctx = cv.getContext("2d");
+function fit() {
+  const st = document.getElementById("stage");
+  const s = Math.min(st.clientWidth / W, st.clientHeight / H), dpr = window.devicePixelRatio || 1;
+  cv.style.width = W * s + "px"; cv.style.height = H * s + "px";
+  cv.width = W * s * dpr; cv.height = H * s * dpr; ctx.setTransform(s * dpr, 0, 0, s * dpr, 0, 0);
+}
+window.addEventListener("resize", fit);
+
+const INK = "#1a2233", MUTED = "#5b6478", GRID = "#e1e5ec", WIRE = "#4a5468", OFFC = "#b8bfcc";
+const C1 = "#1f6fd6", C2 = "#e07a00", OUTC = "#18a058";
+
+function text(t, x, y, size, color, align = "center", weight = "normal") {
+  ctx.fillStyle = color; ctx.font = `${weight} ${size}px Segoe UI, Arial`;
+  ctx.textAlign = align; ctx.textBaseline = "middle"; ctx.fillText(t, x, y);
+}
+function sub(main, s, x, y, size, color, align = "left") {
+  ctx.font = `bold ${size}px Segoe UI, Arial`; const w1 = ctx.measureText(main).width;
+  ctx.font = `bold ${size * 0.62}px Segoe UI, Arial`; const w2 = ctx.measureText(s).width;
+  const x0 = align === "center" ? x - (w1 + w2) / 2 : align === "right" ? x - w1 - w2 : x;
+  ctx.fillStyle = color; ctx.textAlign = "left"; ctx.textBaseline = "middle";
+  ctx.font = `bold ${size}px Segoe UI, Arial`; ctx.fillText(main, x0, y);
+  ctx.font = `bold ${size * 0.62}px Segoe UI, Arial`; ctx.fillText(s, x0 + w1 + 1, y + size * 0.3);
+  return x0 + w1 + w2 + 2;
+}
+function poly(pts, color, w = 4) {
+  ctx.strokeStyle = color; ctx.lineWidth = w; ctx.lineCap = "round"; ctx.lineJoin = "round";
+  ctx.beginPath(); ctx.moveTo(pts[0][0], pts[0][1]); for (const p of pts.slice(1)) ctx.lineTo(p[0], p[1]); ctx.stroke();
+}
+function roundRect(x, y, w, h, r) {
+  ctx.beginPath(); ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath();
+}
+
+// ---------- circuit geometry ----------
+const PCX = 250, SCX = 330, TY = 240, BY = 520, CY = 380;
+const NT = [540, TY], NB = [540, BY], NL = [400, CY], NR = [680, CY], LX = 760, LY = 660, R0 = 520, R1 = 640;
+function coil(x, y0, y1, n, dir, color) {
+  ctx.strokeStyle = color; ctx.lineWidth = 4; ctx.beginPath();
+  const h = (y1 - y0) / n;
+  for (let k = 0; k < n; k++) { const yc = y0 + h * (k + 0.5); ctx.arc(x, yc, h / 2, -Math.PI / 2, Math.PI / 2, dir < 0); }
+  ctx.stroke();
+}
+// diode from anode a to cathode k
+function diode(a, k, on, color, label, side, fault) {
+  const mx = (a[0] + k[0]) / 2, my = (a[1] + k[1]) / 2, ang = Math.atan2(k[1] - a[1], k[0] - a[0]);
+  const c = on ? color : OFFC;
+  if (on) { ctx.fillStyle = color + "22"; ctx.beginPath(); ctx.arc(mx, my, 40, 0, 7); ctx.fill(); }
+  ctx.save(); ctx.translate(mx, my); ctx.rotate(ang);
+  const L = Math.hypot(k[0] - a[0], k[1] - a[1]) / 2;
+  poly([[-L, 0], [-20, 0]], on ? color : WIRE); poly([[20, 0], [L, 0]], on ? color : WIRE);
+  ctx.fillStyle = c; ctx.beginPath(); ctx.moveTo(-20, -20); ctx.lineTo(-20, 20); ctx.lineTo(18, 0); ctx.closePath(); ctx.fill();
+  ctx.strokeStyle = c; ctx.lineWidth = 6; ctx.beginPath(); ctx.moveTo(20, -22); ctx.lineTo(20, 22); ctx.stroke();
+  if (fault) { ctx.strokeStyle = "#d93636"; ctx.lineWidth = 4; ctx.beginPath();
+    ctx.moveTo(-26, -26); ctx.lineTo(26, 26); ctx.moveTo(26, -26); ctx.lineTo(-26, 26); ctx.stroke(); }
+  ctx.restore();
+  const nx = -Math.sin(ang) * side, ny = Math.cos(ang) * side;
+  text(label, mx + nx * 46, my + ny * 46 - 9, 19, on ? color : MUTED, "center", "bold");
+  text(on ? "ON" : fault ? "OPEN" : "OFF", mx + nx * 46, my + ny * 46 + 11, 13, on ? color : fault ? "#d93636" : MUTED, "center", "bold");
+}
+function drawCircuit(t) {
+  const v = vsec(t), o = out(t), on1 = o.d === 1, on2 = o.d === 2;
+  const act = on1 ? C1 : on2 ? C2 : WIRE;
+  // AC source and primary
+  const sx = 100;
+  poly([[sx, CY - 40], [sx, 250], [PCX, 250]], WIRE); poly([[sx, CY + 40], [sx, 510], [PCX, 510]], WIRE);
+  ctx.fillStyle = "#fff"; ctx.strokeStyle = WIRE; ctx.lineWidth = 4; ctx.beginPath(); ctx.arc(sx, CY, 40, 0, 7); ctx.fill(); ctx.stroke();
+  ctx.beginPath(); for (let k = 0; k <= 40; k++) { const x = sx - 22 + k * 1.1, y = CY - 12 * Math.sin(k / 40 * 2 * Math.PI); k ? ctx.lineTo(x, y) : ctx.moveTo(x, y); } ctx.stroke();
+  text("230 V", 190, CY - 12, 17, INK, "center", "bold"); text("50 Hz", 190, CY + 14, 15, MUTED);
+  coil(PCX, 250, 510, 7, 1, WIRE);
+  ctx.strokeStyle = INK; ctx.lineWidth = 3;
+  [PCX + 30, PCX + 42].forEach(x => { ctx.beginPath(); ctx.moveTo(x, 200); ctx.lineTo(x, 560); ctx.stroke(); });
+  // secondary
+  coil(SCX, TY, BY, 7, -1, act);
+  text("12 V", SCX + 28, CY - 60, 16, MUTED, "left", "bold");
+  poly([[SCX, TY], NT], act);
+  // bottom wire with a hop over the minus wire at x = NL
+  ctx.strokeStyle = act; ctx.lineWidth = 4; ctx.beginPath(); ctx.moveTo(SCX, BY); ctx.lineTo(NL[0] - 12, BY);
+  ctx.arc(NL[0], BY, 12, Math.PI, 0, false); ctx.lineTo(NB[0], BY); ctx.stroke();
+  const pTop = v >= 0 ? "+" : "−", pBot = v >= 0 ? "−" : "+";
+  const sgn = (p, x, y) => text(p, x, y, 28, p === "+" ? "#d93636" : "#2f6fd6", "center", "bold");
+  if (Math.abs(v) > 0.5) { sgn(pTop, SCX + 40, TY - 24); sgn(pBot, SCX + 40, BY + 26); }
+  // bridge: D1 top to +, D2 minus to bottom, D3 bottom to +, D4 minus to top
+  diode(NT, NR, on1, C1, "D1", -1);
+  diode(NL, NB, on1, C1, "D2", -1);
+  diode(NB, NR, on2, C2, "D3", 1, d2Open);
+  diode(NL, NT, on2, C2, "D4", 1);
+  // load: + right, minus left, R_L along the bottom
+  poly([NR, [LX, CY], [LX, LY], [R1, LY]], act);
+  poly([[R0, LY], [NL[0], LY], NL], act);
+  ctx.strokeStyle = o.d ? OUTC : WIRE; ctx.lineWidth = 4; ctx.beginPath(); ctx.moveTo(R0, LY);
+  for (let k = 0; k < 8; k++) ctx.lineTo(R0 + (R1 - R0) / 8 * (k + 0.5), LY + (k % 2 ? 14 : -14)); ctx.lineTo(R1, LY); ctx.stroke();
+  sub("R", "L", (R0 + R1) / 2 - 10, LY - 36, 20, INK); text("1 kΩ", (R0 + R1) / 2, LY + 34, 16, MUTED);
+  ctx.fillStyle = INK; [NT, NB, NL, NR].forEach(([x, y]) => { ctx.beginPath(); ctx.arc(x, y, 6, 0, 7); ctx.fill(); });
+  text("+", NR[0] + 20, CY - 24, 30, "#d93636", "center", "bold");
+  text("−", NL[0] - 22, CY - 24, 30, "#2f6fd6", "center", "bold");
+  // live output tag
+  const tx = 600, ty = 572;
+  ctx.fillStyle = "#fff"; ctx.strokeStyle = OUTC; ctx.lineWidth = 2; roundRect(tx, ty, 140, 70, 10); ctx.fill(); ctx.stroke();
+  sub("V", "out", tx + 12, ty + 20, 18, OUTC);
+  text(o.v.toFixed(1) + " V", tx + 70, ty + 48, 26, INK, "center", "bold");
+  // note
+  const note = o.d === 1 ? ["Top end positive", "D1 and D2 conduct"]
+             : o.d === 2 ? ["Bottom end positive", "D3 and D4 conduct"]
+             : (d2Open && v < -VF2) ? ["Bottom end positive", "D3 open: no current, output 0"]
+             : ["Below 1.4 V", "no diode pair conducts"];
+  const nc = o.d === 1 ? C1 : o.d === 2 ? C2 : MUTED;
+  ctx.fillStyle = "#fff"; ctx.strokeStyle = nc; ctx.lineWidth = 2; roundRect(400, 40, 340, 72, 10); ctx.fill(); ctx.stroke();
+  text(note[0], 570, 62, 18, nc, "center", "bold"); text(note[1], 570, 90, 16, INK);
+}
+
+// ---------- current dots (conventional current) ----------
+const LOAD = [NR, [LX, CY], [LX, LY], [NL[0], LY], NL];
+const P1 = [[SCX, TY], NT, ...LOAD, NB, [SCX, BY], [SCX, TY]];
+const P2 = [[SCX, BY], NB, ...LOAD, NT, [SCX, TY], [SCX, BY]];
+const plen = p => p.slice(1).reduce((a, q, k) => a + Math.hypot(q[0] - p[k][0], q[1] - p[k][1]), 0);
+function at(p, d) { for (let k = 1; k < p.length; k++) { const l = Math.hypot(p[k][0] - p[k - 1][0], p[k][1] - p[k - 1][1]);
+  if (d <= l) return [p[k - 1][0] + (p[k][0] - p[k - 1][0]) * d / l, p[k - 1][1] + (p[k][1] - p[k - 1][1]) * d / l]; d -= l; } return p[0]; }
+let ph1 = 0, ph2 = 0;
+function drawFlow(t, dtReal) {
+  const o = out(t), SP = 30;
+  const step = 14 * o.v * dtReal;
+  if (o.d === 1) ph1 = (ph1 + step) % SP; if (o.d === 2) ph2 = (ph2 + step) % SP;
+  const draw = (p, ph, col) => { const L = plen(p);
+    for (let d = ph; d < L; d += SP) { const [x, y] = at(p, d);
+      ctx.fillStyle = col; ctx.beginPath(); ctx.arc(x, y, 6.5, 0, 7); ctx.fill();
+      ctx.strokeStyle = "#fff"; ctx.lineWidth = 2; ctx.stroke(); } };
+  if (o.d === 1) draw(P1, ph1, C1);
+  if (o.d === 2) draw(P2, ph2, C2);
+}
+
+// ---------- graphs ----------
+const GX = 860, GW = 500, WIN = 2 * T;
+function axes(y0, h, vmax, title, unit) {
+  ctx.strokeStyle = GRID; ctx.lineWidth = 1;
+  for (let k = 0; k <= 4; k++) { const x = GX + GW * k / 4; ctx.beginPath(); ctx.moveTo(x, y0); ctx.lineTo(x, y0 + h); ctx.stroke();
+    text((k * 10) + " ms", x, y0 + h + 14, 12, MUTED); }
+  ctx.strokeStyle = WIRE; ctx.lineWidth = 1.5; ctx.strokeRect(GX, y0, GW, h);
+  text(title, GX, y0 - 22, 18, INK, "left", "bold");
+}
+function trace(y0, h, vmin, vmax, f, tNow, color, dash) {
+  const py = v => y0 + h - (v - vmin) / (vmax - vmin) * h;
+  const tw = tNow % WIN;
+  // faint full window, solid up to now
+  for (const [lim, alpha] of [[WIN, 0.22], [tw, 1]]) {
+    ctx.strokeStyle = color; ctx.globalAlpha = alpha; ctx.lineWidth = alpha < 1 ? 2 : 3; ctx.setLineDash(dash || []);
+    ctx.beginPath(); const n = 400;
+    for (let k = 0; k <= n; k++) { const tt = lim * k / n; const x = GX + GW * tt / WIN, y = py(f(tt));
+      k ? ctx.lineTo(x, y) : ctx.moveTo(x, y); }
+    ctx.stroke();
+  }
+  ctx.globalAlpha = 1; ctx.setLineDash([]);
+  return py;
+}
+function drawGraphs(t) {
+  const tw = t % WIN, cx = GX + GW * tw / WIN;
+  // input
+  const y1 = 80, h1 = 230;
+  axes(y1, h1, VP, "Input: transformer secondary");
+  const py1 = v => y1 + h1 / 2 - v / 20 * (h1 / 2);
+  ctx.strokeStyle = WIRE; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(GX, py1(0)); ctx.lineTo(GX + GW, py1(0)); ctx.stroke();
+  for (const [lim, alpha] of [[WIN, 0.25], [tw, 1]]) {
+    ctx.globalAlpha = alpha; ctx.lineWidth = alpha < 1 ? 2 : 3.5; const n = 500; let prev = null;
+    for (let k = 0; k <= n; k++) { const tt = lim * k / n, v = vsec(tt), x = GX + GW * tt / WIN, y = py1(v);
+      if (prev) { ctx.strokeStyle = v >= 0 ? C1 : C2; ctx.beginPath(); ctx.moveTo(prev.x, prev.y); ctx.lineTo(x, y); ctx.stroke(); }
+      prev = { x, y }; }
+  }
+  ctx.globalAlpha = 1;
+  [[17, "+17"], [0, "0"], [-17, "−17"]].forEach(([v, l]) => text(l, GX - 8, py1(v), 12, MUTED, "right"));
+  text("top end positive: D1 + D2", GX + GW - 4, y1 - 44, 14, C1, "right", "bold");
+  text("bottom end positive: D3 + D4", GX + GW - 4, y1 - 24, 14, C2, "right", "bold");
+  // output
+  const y2 = 380, h2 = 220;
+  axes(y2, h2, VP, "");
+  ctx.font = "bold 18px Segoe UI, Arial"; const ow = ctx.measureText("Output: across ").width;
+  text("Output: across ", GX, y2 - 22, 18, INK, "left", "bold"); sub("R", "L", GX + ow, y2 - 22, 18, INK);
+  const py2 = v => y2 + h2 - v / 20 * h2;
+  ctx.strokeStyle = WIRE; ctx.lineWidth = 1; ctx.setLineDash([6, 5]); ctx.beginPath(); ctx.moveTo(GX, py2(vDC())); ctx.lineTo(GX + GW, py2(vDC())); ctx.stroke(); ctx.setLineDash([]);
+  text("V DC " + vDC().toFixed(1), GX + GW - 4, py2(vDC()) - 10, 13, MUTED, "right");
+  // output coloured by conducting diode
+  for (const [lim, alpha] of [[WIN, 0.25], [tw, 1]]) {
+    ctx.globalAlpha = alpha; ctx.lineWidth = alpha < 1 ? 2 : 3.5; const n = 500; let prev = null;
+    for (let k = 0; k <= n; k++) { const tt = lim * k / n, o = out(tt), x = GX + GW * tt / WIN, y = py2(o.v);
+      if (prev) { ctx.strokeStyle = o.d === 2 || prev.d === 2 ? C2 : o.d === 1 || prev.d === 1 ? C1 : WIRE;
+        ctx.beginPath(); ctx.moveTo(prev.x, prev.y); ctx.lineTo(x, y); ctx.stroke(); }
+      prev = { x, y, d: o.d }; }
+  }
+  ctx.globalAlpha = 1;
+  [[VP - VF2, (VP - VF2).toFixed(1)], [0, "0"]].forEach(([v, l]) => text(l, GX - 8, py2(v), 12, MUTED, "right"));
+  // cursor
+  ctx.strokeStyle = "#d93636"; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(cx, y1); ctx.lineTo(cx, y1 + h1); ctx.moveTo(cx, y2); ctx.lineTo(cx, y2 + h2); ctx.stroke();
+  const o = out(t);
+  ctx.fillStyle = vsec(t) >= 0 ? C1 : C2; ctx.beginPath(); ctx.arc(cx, py1(vsec(t)), 6, 0, 7); ctx.fill();
+  ctx.fillStyle = o.d === 2 ? C2 : o.d === 1 ? C1 : WIRE; ctx.beginPath(); ctx.arc(cx, py2(o.v), 7, 0, 7); ctx.fill();
+
+  // readings
+  const ry = 650, cells = [
+    ["V", "rms", VRMS.toFixed(0) + " V", "secondary"],
+    ["V", "P", VP.toFixed(1) + " V", "rms × 1.414"],
+    ["V", "P(out)", (VP - VF2).toFixed(1) + " V", "peak − 1.4"],
+    ["V", "DC", vDC().toFixed(1) + " V", d2Open ? "peak out / π" : "2 × peak out / π"],
+    ["f", "out", (d2Open ? 50 : 100) + " Hz", d2Open ? "half wave" : "= 2 × 50 Hz"],
+  ];
+  const cw = (W - GX + 0) / cells.length - 4;
+  cells.forEach((c, k) => { const x = GX - 40 + k * (cw + 10);
+    ctx.fillStyle = "#fff"; ctx.strokeStyle = "#dfe3ea"; ctx.lineWidth = 1.5; roundRect(x, ry - 10, cw, 92, 8); ctx.fill(); ctx.stroke();
+    sub(c[0], c[1], x + cw / 2, ry + 12, 17, INK, "center");
+    text(c[2], x + cw / 2, ry + 42, 19, OUTC, "center", "bold");
+    text(c[3], x + cw / 2, ry + 68, 11.5, MUTED); });
+}
+
+// ---------- loop ----------
+let t = 0.0005, playing = true, last = performance.now();
+const spd = document.getElementById("spd");
+function frame(now) {
+  const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  if (playing) t += dt * T * spd.value / 100;   // speed 100 = one cycle per second
+  ctx.fillStyle = "#f6f7fb"; ctx.fillRect(0, 0, W, H);
+  drawCircuit(t);
+  drawFlow(t, playing ? dt : 0);
+  ctx.strokeStyle = "#dfe3ea"; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(800, 30); ctx.lineTo(800, 620); ctx.stroke();
+  drawGraphs(t);
+  text("Dots show current", 40, 30, 16, MUTED, "left", "bold");
+  requestAnimationFrame(frame);
+}
+const $ = id => document.getElementById(id);
+function setPlay(p) { playing = p; $("play").textContent = p ? "Pause (Space)" : "Play (Space)"; $("play").classList.toggle("on", p); }
+$("play").onclick = () => setPlay(!playing);
+$("step").onclick = () => { setPlay(false); t += T / 20; };
+$("d2").onclick = () => { d2Open = !d2Open; $("d2").classList.toggle("warn", d2Open); $("d2").textContent = d2Open ? "Repair D3" : "Open D3 (fault)"; };
+$("rst").onclick = () => { t = 0.0005; d2Open = false; $("d2").classList.remove("warn"); $("d2").textContent = "Open D3 (fault)"; spd.value = 40; setPlay(true); };
+window.addEventListener("keydown", e => {
+  if (e.key === " ") { setPlay(!playing); e.preventDefault(); }
+  else if (e.key === "ArrowRight") $("step").click();
+  else if (e.key === "f" || e.key === "F") { document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen(); }
+  else return;
+  if (document.activeElement && document.activeElement.tagName === "BUTTON") document.activeElement.blur();
+});
+fit(); requestAnimationFrame(frame);
+</script>
+</body>
+</html>
