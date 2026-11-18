@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Diode Knee Voltage</title>
 <style>
-  :root { --bg:#0f1420; --panel:#171e2e; --ink:#e8edf7; --muted:#8c97ad; --accent:#ffcc33; }
+  :root { --bg:#f6f7fb; --panel:#ffffff; --ink:#1a2233; --muted:#5b6478; --accent:#d49b00; }
   * { box-sizing:border-box; }
   html,body { margin:0; height:100%; background:var(--bg); color:var(--ink);
     font-family: "Segoe UI", Roboto, Arial, sans-serif; overflow:hidden; }
@@ -13,13 +13,13 @@
   #stage { flex:1; position:relative; }
   canvas { position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); }
   #bar { display:flex; gap:10px; align-items:center; flex-wrap:wrap; padding:10px 16px;
-    background:var(--panel); border-top:1px solid #263049; font-size:15px; }
+    background:var(--panel); border-top:1px solid #dfe3ea; font-size:15px; }
   #bar label { color:var(--muted); }
   input[type=range] { width:260px; accent-color:var(--accent); }
-  button { background:#24304a; color:var(--ink); border:1px solid #344262; border-radius:6px;
+  button { background:#eef1f6; color:var(--ink); border:1px solid #cfd5e0; border-radius:6px;
     padding:7px 12px; font-size:14px; cursor:pointer; }
-  button:hover { background:#2e3c5c; }
-  button.on { background:#3a4a20; border-color:#6a8a2a; }
+  button:hover { background:#e2e7f0; }
+  button.on { background:#e6f4d7; border-color:#7fb24a; }
   .sp { flex:1; }
   .keys { color:var(--muted); font-size:12px; }
 </style>
@@ -87,8 +87,8 @@ const NODES = {
 const nodeV = (k, s) => ({ P: VS, A: s.vA, B: s.vB, G: 0, G2: 0 })[k];
 
 const meters = [
-  { id: "R", label: "V", sub: "R", x: 430, y: 14, w: 230, h: 124, red: "A", com: "B", col: "#ffcc33" },
-  { id: "D", label: "V", sub: "D", x: 680, y: 300, w: 210, h: 124, red: "B", com: "G", col: "#4fd1c5" },
+  { id: "R", label: "V", sub: "R", x: 430, y: 14, w: 230, h: 124, red: "A", com: "B", col: "#d49b00" },
+  { id: "D", label: "V", sub: "D", x: 680, y: 300, w: 210, h: 124, red: "B", com: "G", col: "#1fa89b" },
 ];
 
 // ---------- state ----------
@@ -97,10 +97,10 @@ let drag = null, mouse = { x: 0, y: 0 };
 
 // ---------- colour by potential ----------
 function vcol(v) {
-  if (!showCol) return "#c7cfdd";
+  if (!showCol) return "#4a5468";
   const t = Math.max(0, Math.min(1, v / VS));
   const h = 220 - 220 * t;            // blue (0 V) to red (5 V)
-  return `hsl(${h},90%,${55 + 5 * Math.sin(t * Math.PI)}%)`;
+  return `hsl(${h},85%,${44 + 4 * Math.sin(t * Math.PI)}%)`;
 }
 function line(pts, v, w = 5) {
   ctx.strokeStyle = vcol(v); ctx.lineWidth = w; ctx.lineCap = "round"; ctx.lineJoin = "round";
@@ -145,15 +145,15 @@ function drawCircuit(s) {
   ctx.lineCap = "butt";
   for (let k = 0; k < 4; k++) {
     const y = 300 + k * 40;
-    ctx.strokeStyle = "#e8edf7"; ctx.lineWidth = 5;
+    ctx.strokeStyle = "#1a2233"; ctx.lineWidth = 5;
     ctx.beginPath(); ctx.moveTo(BX - 34, y); ctx.lineTo(BX + 34, y); ctx.stroke();
     ctx.lineWidth = 10; ctx.beginPath(); ctx.moveTo(BX - 16, y + 18); ctx.lineTo(BX + 16, y + 18); ctx.stroke();
   }
   gradSeg(BX, 200, BX, 300, VS, VS, () => { ctx.lineWidth = 5; ctx.beginPath(); ctx.moveTo(BX, 200); ctx.lineTo(BX, 300); ctx.stroke(); });
   gradSeg(BX, 438, BX, 560, 0, 0, () => { ctx.lineWidth = 5; ctx.beginPath(); ctx.moveTo(BX, 438); ctx.lineTo(BX, 560); ctx.stroke(); });
-  text("+", BX - 50, 296, 30, "#ff6b6b", "center", "bold");
-  text("−", BX - 50, 440, 30, "#6ba8ff", "center", "bold");
-  text("5 V", BX + 70, 370, 24, "#e8edf7", "center", "bold");
+  text("+", BX - 50, 296, 30, "#d93636", "center", "bold");
+  text("−", BX - 50, 440, 30, "#2f6fd6", "center", "bold");
+  text("5 V", BX + 70, 370, 24, "#1a2233", "center", "bold");
 
   // pot: two gradients split at wiper
   const zig = (y0, y1, x) => { ctx.lineWidth = 5; ctx.beginPath(); ctx.moveTo(x, y0);
@@ -165,13 +165,13 @@ function drawCircuit(s) {
   // wiper arrow
   ctx.fillStyle = vcol(s.vA); ctx.beginPath();
   ctx.moveTo(PX + 18, yw); ctx.lineTo(PX + 36, yw - 9); ctx.lineTo(PX + 36, yw + 9); ctx.fill();
-  text("10 kΩ", PX - 62, 370, 20, "#e8edf7");
-  text("pot", PX - 62, 394, 16, "#8c97ad");
+  text("10 kΩ", PX - 62, 370, 20, "#1a2233");
+  text("pot", PX - 62, 394, 16, "#5b6478");
 
   // resistor
   gradSeg(R0, RY, R1, RY, s.vA, s.vB, () => { ctx.lineWidth = 5; ctx.beginPath(); ctx.moveTo(R0, RY);
     const n = 8, w = (R1 - R0) / n; for (let k = 0; k < n; k++) ctx.lineTo(R0 + w * (k + 0.5), RY + (k % 2 ? 14 : -14)); ctx.lineTo(R1, RY); ctx.stroke(); });
-  text("330 Ω", (R0 + R1) / 2, RY + 40, 20, "#e8edf7");
+  text("330 Ω", (R0 + R1) / 2, RY + 40, 20, "#1a2233");
 
   // diode (anode top)
   gradSeg(DX, D0, DX, D1, s.vB, 0, () => {
@@ -179,31 +179,31 @@ function drawCircuit(s) {
     ctx.beginPath(); ctx.moveTo(DX - 26, D0 + 18); ctx.lineTo(DX + 26, D0 + 18); ctx.lineTo(DX, D0 + 62); ctx.closePath(); ctx.fill();
   });
   ctx.strokeStyle = vcol(0); ctx.lineWidth = 6; ctx.beginPath(); ctx.moveTo(DX - 26, D0 + 64); ctx.lineTo(DX + 26, D0 + 64); ctx.stroke();
-  text("1N4007", DX - 70, 425, 18, "#e8edf7");
+  text("1N4007", DX - 70, 425, 18, "#1a2233");
 
   // ground symbol
-  const gx = 480; ctx.strokeStyle = "#c7cfdd"; ctx.lineWidth = 3;
+  const gx = 480; ctx.strokeStyle = "#4a5468"; ctx.lineWidth = 3;
   ctx.beginPath(); ctx.moveTo(gx, GY); ctx.lineTo(gx, GY + 22); ctx.stroke();
   [[26, 22], [17, 31], [8, 40]].forEach(([w, y]) => { ctx.beginPath(); ctx.moveTo(gx - w, GY + y); ctx.lineTo(gx + w, GY + y); ctx.stroke(); });
-  text("0 V (common)", gx, GY + 64, 17, "#8c97ad");
+  text("0 V (common)", gx, GY + 64, 17, "#5b6478");
 
   // nodes
   for (const [k, n] of Object.entries(NODES)) {
     ctx.fillStyle = "#fff"; ctx.beginPath(); ctx.arc(n.x, n.y, 7, 0, 7); ctx.fill();
-    ctx.strokeStyle = "#0f1420"; ctx.lineWidth = 2; ctx.stroke();
+    ctx.strokeStyle = "#1a2233"; ctx.lineWidth = 2; ctx.stroke();
     if (k === "G2") continue;
     const off = { P: [0, -24], A: [-22, -22], B: [22, -22], G: [22, 22] }[k];
-    text(n.name, n.x + off[0], n.y + off[1], 18, "#ffffff", "center", "bold");
+    text(n.name, n.x + off[0], n.y + off[1], 18, "#1a2233", "center", "bold");
   }
 }
 
 // ---------- voltage tags on the circuit ----------
 function tag(x, y, v, dx, dy) {
   const t = v.toFixed(2) + " V", w = 74, h = 28, X = x + dx, Y = y + dy;
-  ctx.strokeStyle = "rgba(255,255,255,0.35)"; ctx.lineWidth = 1.5; ctx.setLineDash([4, 4]);
+  ctx.strokeStyle = "rgba(0,0,0,0.35)"; ctx.lineWidth = 1.5; ctx.setLineDash([4, 4]);
   ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(X, Y); ctx.stroke(); ctx.setLineDash([]);
   ctx.fillStyle = vcol(v); roundRect(X - w / 2, Y - h / 2, w, h, 8); ctx.fill();
-  ctx.fillStyle = "#0b0f18"; ctx.font = "bold 16px Segoe UI, Arial"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  const t01 = v / VS; ctx.fillStyle = (showCol && (t01 < 0.15 || t01 > 0.8)) ? "#ffffff" : "#0b0f18"; ctx.font = "bold 16px Segoe UI, Arial"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
   ctx.fillText(t, X, Y + 1);
 }
 function drawTags(s) {
@@ -216,17 +216,17 @@ function drawTags(s) {
 function drawResistorNote(s) {
   const vr = s.vA - s.vB, same = Math.abs(vr) < 0.005;
   const x = 190, y = 62;
-  ctx.fillStyle = same ? "rgba(255,204,51,0.14)" : "rgba(79,209,197,0.10)";
+  ctx.fillStyle = same ? "rgba(212,155,0,0.12)" : "rgba(31,168,155,0.10)";
   roundRect(x - 165, y - 42, 330, 84, 10); ctx.fill();
-  ctx.strokeStyle = same ? "#ffcc33" : "#344262"; ctx.lineWidth = 2; ctx.stroke();
+  ctx.strokeStyle = same ? "#d49b00" : "#d5dae4"; ctx.lineWidth = 2; ctx.stroke();
   if (same) {
-    text("A and B are at the SAME voltage", x, y - 20, 17, "#ffcc33", "center", "bold");
-    text(s.vA.toFixed(2) + " V  −  " + s.vB.toFixed(2) + " V  =  0.00 V", x, y + 4, 17, "#e8edf7");
-    text("no difference, so the meter reads 0", x, y + 27, 15, "#8c97ad");
+    text("A and B are at the SAME voltage", x, y - 20, 17, "#d49b00", "center", "bold");
+    text(s.vA.toFixed(2) + " V  −  " + s.vB.toFixed(2) + " V  =  0.00 V", x, y + 4, 17, "#1a2233");
+    text("no difference, so the meter reads 0", x, y + 27, 15, "#5b6478");
   } else {
-    text("A is higher than B", x, y - 20, 17, "#4fd1c5", "center", "bold");
-    text(s.vA.toFixed(2) + " V  −  " + s.vB.toFixed(2) + " V  =  " + vr.toFixed(2) + " V", x, y + 4, 17, "#e8edf7");
-    text("this difference is the reading", x, y + 27, 15, "#8c97ad");
+    text("A is higher than B", x, y - 20, 17, "#1fa89b", "center", "bold");
+    text(s.vA.toFixed(2) + " V  −  " + s.vB.toFixed(2) + " V  =  " + vr.toFixed(2) + " V", x, y + 4, 17, "#1a2233");
+    text("this difference is the reading", x, y + 27, 15, "#5b6478");
   }
 }
 
@@ -278,20 +278,20 @@ function roundRect(x, y, w, h, r) {
 function drawLadder(s) {
   const x0 = 960, x1 = 1060, yTop = 120, yBot = 620;
   const yOf = v => yBot - (v / VS) * (yBot - yTop);
-  text("Voltage level", (x0 + x1) / 2 - 10, 70, 19, "#e8edf7", "center", "bold");
-  text("of each point", (x0 + x1) / 2 - 10, 92, 15, "#8c97ad");
+  text("Voltage level", (x0 + x1) / 2 - 10, 70, 19, "#1a2233", "center", "bold");
+  text("of each point", (x0 + x1) / 2 - 10, 92, 15, "#5b6478");
   // scale
-  ctx.strokeStyle = "#344262"; ctx.lineWidth = 1;
+  ctx.strokeStyle = "#d5dae4"; ctx.lineWidth = 1;
   for (let v = 0; v <= VS; v++) { const y = yOf(v); ctx.beginPath(); ctx.moveTo(x0 - 30, y); ctx.lineTo(x1, y); ctx.stroke();
-    text(v + " V", x0 - 48, y, 13, "#5d6882"); }
+    text(v + " V", x0 - 48, y, 13, "#7a8399"); }
   // colour bar
   for (let k = 0; k < 100; k++) { const v = k / 100 * VS; ctx.fillStyle = vcol(v);
     ctx.fillRect(x0 - 22, yOf(v + VS / 100), 10, (yBot - yTop) / 100 + 1); }
   // node levels
   const lv = [["P", VS], ["A", s.vA], ["B", s.vB], ["G", 0]];
   lv.forEach(([n, v], k) => { const y = yOf(v);
-    ctx.strokeStyle = "#ffffff"; ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(x0, y); ctx.lineTo(x1, y); ctx.stroke();
-    text(n, x0 + 10 + k * 26, y - 11, 15, "#ffffff", "left", "bold"); });
+    ctx.strokeStyle = "#1a2233"; ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(x0, y); ctx.lineTo(x1, y); ctx.stroke();
+    text(n, x0 + 10 + k * 26, y - 11, 15, "#1a2233", "left", "bold"); });
   // meter brackets
   meters.forEach((m, k) => {
     const { r, c, v } = reading(m, s), bx = x1 + 18 + k * 44;
@@ -302,7 +302,7 @@ function drawLadder(s) {
     ctx.fillStyle = "#222"; ctx.strokeStyle = "#aaa"; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.arc(bx, yc, 5, 0, 7); ctx.fill(); ctx.stroke();
     sub(m.label, m.sub, bx + 6, Math.min(yr, yc) - 12, 17, m.col, "center");
   });
-  text("gap from COM to red", (x0 + x1) / 2 + 10, 655, 15, "#8c97ad"); text("= meter reading", (x0 + x1) / 2 + 10, 675, 15, "#8c97ad");
+  text("gap from COM to red", (x0 + x1) / 2 + 10, 655, 15, "#5b6478"); text("= meter reading", (x0 + x1) / 2 + 10, 675, 15, "#5b6478");
 }
 
 // ---------- V-I plot ----------
@@ -310,55 +310,55 @@ function drawGraph(s) {
   const gx = 1215, gy = 120, gw = 160, gh = 330;
   const VMAX = 0.8, IMAX = 15;
   const px = v => gx + (v / VMAX) * gw, py = i => gy + gh - (i / IMAX) * gh;
-  text("Diode curve", gx + gw / 2, 70, 19, "#e8edf7", "center", "bold");
-  ctx.strokeStyle = "#344262"; ctx.lineWidth = 1;
+  text("Diode curve", gx + gw / 2, 70, 19, "#1a2233", "center", "bold");
+  ctx.strokeStyle = "#d5dae4"; ctx.lineWidth = 1;
   for (let v = 0; v <= VMAX + 1e-9; v += 0.2) { ctx.beginPath(); ctx.moveTo(px(v), gy); ctx.lineTo(px(v), gy + gh); ctx.stroke();
-    text(v.toFixed(1), px(v), gy + gh + 14, 12, "#5d6882"); }
+    text(v.toFixed(1), px(v), gy + gh + 14, 12, "#7a8399"); }
   for (let i = 0; i <= IMAX; i += 5) { ctx.beginPath(); ctx.moveTo(gx, py(i)); ctx.lineTo(gx + gw, py(i)); ctx.stroke();
-    text(String(i), gx - 14, py(i), 12, "#5d6882"); }
-  ctx.strokeStyle = "#c7cfdd"; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(gx, gy); ctx.lineTo(gx, gy + gh); ctx.lineTo(gx + gw, gy + gh); ctx.stroke();
-  sub("V", "D", gx + gw / 2 - 16, gy + gh + 40, 15, "#c7cfdd"); text("(V)", gx + gw / 2 + 14, gy + gh + 36, 13, "#8c97ad");
+    text(String(i), gx - 14, py(i), 12, "#7a8399"); }
+  ctx.strokeStyle = "#4a5468"; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(gx, gy); ctx.lineTo(gx, gy + gh); ctx.lineTo(gx + gw, gy + gh); ctx.stroke();
+  sub("V", "D", gx + gw / 2 - 16, gy + gh + 40, 15, "#4a5468"); text("(V)", gx + gw / 2 + 14, gy + gh + 36, 13, "#5b6478");
   ctx.save(); ctx.translate(gx - 36, gy + gh / 2); ctx.rotate(-Math.PI / 2);
-  sub("I", "D", -22, 5, 15, "#c7cfdd"); ctx.fillStyle = "#8c97ad"; ctx.font = "13px Segoe UI"; ctx.fillText("(mA)", 2, 4); ctx.restore();
+  sub("I", "D", -22, 5, 15, "#4a5468"); ctx.fillStyle = "#5b6478"; ctx.font = "13px Segoe UI"; ctx.fillText("(mA)", 2, 4); ctx.restore();
   if (showCurve) {
-    ctx.strokeStyle = "rgba(255,204,51,0.55)"; ctx.lineWidth = 2; ctx.beginPath();
+    ctx.strokeStyle = "rgba(212,155,0,0.6)"; ctx.lineWidth = 2; ctx.beginPath();
     for (let k = 0; k <= 200; k++) { const i = IMAX * 1e-3 * Math.pow(k / 200, 2); const v = vd(i);
       k ? ctx.lineTo(px(v), py(i * 1e3)) : ctx.moveTo(px(v), py(i * 1e3)); } ctx.stroke();
   }
-  points.forEach(p => { ctx.fillStyle = "#ffcc33"; ctx.beginPath(); ctx.arc(px(p.v), py(p.i), 4.5, 0, 7); ctx.fill(); });
+  points.forEach(p => { ctx.fillStyle = "#d49b00"; ctx.beginPath(); ctx.arc(px(p.v), py(p.i), 4.5, 0, 7); ctx.fill(); });
   const cx = px(Math.min(s.vB, VMAX)), cy = py(Math.min(s.iD * 1e3, IMAX));
-  ctx.strokeStyle = "#ffffff"; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(cx, cy, 8, 0, 7); ctx.stroke();
+  ctx.strokeStyle = "#1a2233"; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(cx, cy, 8, 0, 7); ctx.stroke();
 
   // calculation box
   const bx = 1160, by = 530;
-  ctx.fillStyle = "#171e2e"; roundRect(bx, by, 228, 190, 10); ctx.fill();
-  ctx.strokeStyle = "#263049"; ctx.lineWidth = 1; ctx.stroke();
+  ctx.fillStyle = "#ffffff"; roundRect(bx, by, 228, 190, 10); ctx.fill();
+  ctx.strokeStyle = "#dfe3ea"; ctx.lineWidth = 1; ctx.stroke();
   const vr = s.vA - s.vB;
-  sub("I", "D", bx + 16, by + 38, 22, "#ffffff"); text("= ", bx + 58, by + 32, 22, "#ffffff", "center", "bold");
-  sub("V", "R", bx + 76, by + 24, 18, "#ffcc33"); ctx.fillStyle = "#fff"; ctx.fillRect(bx + 72, by + 32, 34, 2);
-  text("R", bx + 89, by + 48, 18, "#ffffff", "center", "bold");
-  text("= " + vr.toFixed(2) + " V / 330 Ω", bx + 112, by + 36, 14, "#e8edf7", "left");
-  text("= " + (s.iD * 1e3).toFixed(2) + " mA", bx + 70, by + 82, 24, "#ffcc33", "left", "bold");
-  sub("V", "D", bx + 16, by + 128, 22, "#4fd1c5");
-  text("= " + s.vB.toFixed(3) + " V", bx + 70, by + 122, 24, "#4fd1c5", "left", "bold");
-  text("points recorded: " + points.length, bx + 122, by + 166, 14, "#8c97ad");
+  sub("I", "D", bx + 16, by + 38, 22, "#1a2233"); text("= ", bx + 58, by + 32, 22, "#1a2233", "center", "bold");
+  sub("V", "R", bx + 76, by + 24, 18, "#d49b00"); ctx.fillStyle = "#1a2233"; ctx.fillRect(bx + 72, by + 32, 34, 2);
+  text("R", bx + 89, by + 48, 18, "#1a2233", "center", "bold");
+  text("= " + vr.toFixed(2) + " V / 330 Ω", bx + 112, by + 36, 14, "#1a2233", "left");
+  text("= " + (s.iD * 1e3).toFixed(2) + " mA", bx + 70, by + 82, 24, "#d49b00", "left", "bold");
+  sub("V", "D", bx + 16, by + 128, 22, "#1fa89b");
+  text("= " + s.vB.toFixed(3) + " V", bx + 70, by + 122, 24, "#1fa89b", "left", "bold");
+  text("points recorded: " + points.length, bx + 122, by + 166, 14, "#5b6478");
 }
 
 // ---------- loop ----------
 let last = performance.now();
 function frame(t) {
   const dt = Math.min(0.05, (t - last) / 1000); last = t;
-  ctx.fillStyle = "#0f1420"; ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = "#f6f7fb"; ctx.fillRect(0, 0, W, H);
   drawCircuit(state);
   meters.forEach(m => { probeWire(m, "com"); probeWire(m, "red"); });
   meters.forEach(m => drawMeter(m, state));
   drawTags(state);
   drawResistorNote(state);
-  ctx.strokeStyle = "#263049"; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(905, 40); ctx.lineTo(905, 720); ctx.stroke();
+  ctx.strokeStyle = "#dfe3ea"; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(905, 40); ctx.lineTo(905, 720); ctx.stroke();
   drawLadder(state);
   drawGraph(state);
   text("A meter only compares two points: reading = V(red) − V(COM)",
-       450, 735, 17, "#8c97ad");
+       450, 735, 17, "#5b6478");
   requestAnimationFrame(frame);
 }
 
