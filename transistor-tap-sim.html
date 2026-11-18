@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Transistor as a Tap</title>
+<title>Water Transistor</title>
 <style>
   :root { --bg:#f6f7fb; --panel:#ffffff; --ink:#1a2233; --muted:#5b6478; --accent:#1f6fd6; }
   * { box-sizing:border-box; }
@@ -35,7 +35,7 @@
     <button id="b1">Active</button>
     <button id="b2">Saturation</button>
     <span class="sp"></span>
-    <span class="keys">Left / Right: turn &nbsp; 1 2 3: regions &nbsp; F: fullscreen</span>
+    <span class="keys">Left / Right: base &nbsp; 1 2 3: regions &nbsp; F: fullscreen</span>
   </div>
 </div>
 <script>
@@ -96,76 +96,92 @@ function arrow(x0, y0, x1, y1, color, w) {
   ctx.lineTo(x1 - Math.cos(a + 0.45) * h, y1 - Math.sin(a + 0.45) * h); ctx.closePath(); ctx.fill();
 }
 
-// ================= LEFT: the tap =================
-const drops = [];
+// ================= LEFT: the water transistor =================
+// Pipes: collector from the high tank (top), base from a small low tank (left), emitter out the bottom.
+// A small base flow pushes a paddle; a rod opens the big flap against a spring.
+const PX = 350;                                   // main pipe centre line
+const CH = { x: 220, y: 300, w: 260, h: 170 };    // chamber
+const HB = [PX - 20, CH.y];                       // big flap hinge
+const HS = [CH.x + 2, 386];                       // small paddle hinge
+const PATH_C = [[PX, 150], [PX, CH.y], [PX + 6, CH.y + 60], [PX, CH.y + CH.h], [PX, 610]];
+const PATH_B = [[120, 400], [CH.x, 400], [CH.x + 60, 420], [PX - 6, CH.y + CH.h - 10], [PX - 4, 610]];
+let wphC = 0, wphB = 0;
+function pipeH(x0, x1, y, w) { ctx.fillRect(x0, y - w / 2, x1 - x0, w); }
+function pipeV(y0, y1, x, w) { ctx.fillRect(x - w / 2, y0, w, y1 - y0); }
 function drawTap(s, dt) {
-  text("The water tap", 330, 36, 24, INK, "center", "bold");
-  // tank
+  text("The water transistor", 330, 36, 24, INK, "center", "bold");
+  const th = s.region === 0 ? 0 : 0.12 + 0.88 * s.turn;     // flap opening 0..1 (spring holds it shut in cut-off)
+  // collector tank (high, big)
   ctx.fillStyle = "#dbeafa"; ctx.strokeStyle = METAL_D; ctx.lineWidth = 3;
-  roundRect(50, 80, 170, 130, 10); ctx.fill(); ctx.stroke();
-  ctx.fillStyle = WATER; ctx.fillRect(53, 112, 164, 95);
-  text("water supply", 135, 98, 15, MUTED);
-  text("(pressure)", 135, 160, 15, "#ffffff", "center", "bold");
-  // supply pipe: tank down, narrow section, to valve
-  ctx.fillStyle = METAL; ctx.fillRect(122, 210, 28, 70);              // down
-  ctx.fillRect(122, 262, 90, 28);                                     // to the right
-  ctx.fillRect(212, 268, 40, 16);                                     // narrow section
-  ctx.fillRect(252, 262, 30, 28);
-  ctx.fillStyle = WATER; ctx.globalAlpha = 0.85;
-  ctx.fillRect(128, 210, 16, 66); ctx.fillRect(128, 268, 84, 16); ctx.fillRect(212, 272, 40, 8); ctx.fillRect(252, 268, 30, 16);
+  roundRect(260, 64, 180, 90, 10); ctx.fill(); ctx.stroke();
+  ctx.fillStyle = WATER; ctx.fillRect(263, 84, 174, 67);
+  text("high tank", 350, 118, 15, "#fff", "center", "bold");
+  // base tank (small, low)
+  ctx.fillStyle = "#fdebd3"; roundRect(30, 340, 90, 80, 8); ctx.fill(); ctx.stroke();
+  ctx.fillStyle = "#f2a24a"; ctx.fillRect(33, 362, 84, 55);
+  text("small", 75, 388, 14, "#fff", "center", "bold"); text("tank", 75, 404, 14, "#fff", "center", "bold");
+  // pipes (metal)
+  ctx.fillStyle = METAL;
+  pipeV(154, 202, PX, 44); pipeV(202, 246, PX, 26); pipeV(246, CH.y, PX, 44);   // collector with narrow part
+  pipeH(120, CH.x, 400, 18);                                                       // base (small)
+  pipeV(CH.y + CH.h, 610, PX, 48);                                                 // emitter (big)
+  // water inside the pipes
+  ctx.fillStyle = WATER; ctx.globalAlpha = 0.9;
+  pipeV(154, 202, PX, 34); pipeV(202, 246, PX, 16); pipeV(246, CH.y, PX, 34);
+  ctx.fillStyle = "#f2a24a"; pipeH(120, CH.x, 400, 10);
   ctx.globalAlpha = 1;
-  ctx.strokeStyle = "#18a058"; ctx.lineWidth = 2; ctx.setLineDash([4, 3]); ctx.strokeRect(206, 258, 52, 36); ctx.setLineDash([]);
-  text("narrow pipe", 232, 312, 14, "#18a058", "center", "bold");
-  sub("= R", "C", 232, 330, 14, "#18a058", "center");
-  // valve body
-  ctx.fillStyle = METAL; ctx.strokeStyle = METAL_D; ctx.lineWidth = 3;
-  roundRect(282, 250, 110, 56, 12); ctx.fill(); ctx.stroke();
-  // inner gate (rises as handle turns)
-  const gateY = 252 + 50 * (1 - s.turn);
-  ctx.fillStyle = METAL_D; ctx.fillRect(330, 252, 14, Math.max(0, gateY - 252));
-  // stem and handle
-  ctx.fillStyle = METAL_D; ctx.fillRect(331, 206, 12, 46);
-  const hx = 337, hy = 200, ang = -s.turn * Math.PI / 2;
-  ctx.save(); ctx.translate(hx, hy); ctx.rotate(ang);
-  ctx.fillStyle = "#d93636"; roundRect(-70, -10, 140, 20, 10); ctx.fill();
-  ctx.fillStyle = "#fff"; ctx.beginPath(); ctx.arc(0, 0, 6, 0, 7); ctx.fill();
-  ctx.restore();
-  // turning effort arrow (base current)
-  if (s.ib > 0) { const w = 2 + 6 * Math.min(1, s.ib / 0.00043);
-    ctx.strokeStyle = CB; ctx.lineWidth = w; ctx.beginPath(); ctx.arc(hx, hy, 92, -Math.PI * 0.95, -Math.PI * 0.62); ctx.stroke();
-    const ex = hx + 92 * Math.cos(-Math.PI * 0.62), ey = hy + 92 * Math.sin(-Math.PI * 0.62);
-    arrow(ex - 10, ey - 6, ex + 4, ey + 2, CB, w); }
-  // spout
-  ctx.fillStyle = METAL; ctx.strokeStyle = METAL_D; ctx.lineWidth = 3;
-  ctx.fillRect(392, 262, 70, 28); ctx.fillRect(440, 262, 28, 70);
-  roundRect(434, 326, 40, 14, 4); ctx.fill(); ctx.stroke();
-  // water stream
-  const f = s.flow, sx = 454, top = 340, bottom = 610;
-  if (f > 0.001) {
-    const w = 4 + 26 * f;
-    const g = ctx.createLinearGradient(0, top, 0, bottom); g.addColorStop(0, WATER); g.addColorStop(1, "#7cc0f5");
-    ctx.fillStyle = g; ctx.globalAlpha = 0.75;
-    ctx.beginPath(); ctx.moveTo(sx - w / 2, top); ctx.lineTo(sx + w / 2, top); ctx.lineTo(sx + w / 2 + 3, bottom); ctx.lineTo(sx - w / 2 - 3, bottom); ctx.fill();
-    ctx.globalAlpha = 1;
-    // falling drops
-    const rate = 60 * f;
-    if (Math.random() < rate * dt) drops.push({ x: sx + (Math.random() - 0.5) * w * 0.8, y: top, v: 120 });
-  }
-  for (const d of drops) { d.v += 900 * dt; d.y += d.v * dt; }
-  while (drops.length && drops[0].y > bottom) drops.shift();
-  ctx.fillStyle = "#1f6fd6"; for (const d of drops) { ctx.beginPath(); ctx.ellipse(d.x, d.y, 3, 5, 0, 0, 7); ctx.fill(); }
+  // narrow pipe marker
+  ctx.strokeStyle = "#18a058"; ctx.lineWidth = 2; ctx.setLineDash([4, 3]); ctx.strokeRect(PX - 30, 198, 60, 52); ctx.setLineDash([]);
+  text("narrow pipe", PX + 44, 214, 14, "#18a058", "left", "bold"); sub("= R", "C", PX + 44, 234, 14, "#18a058");
+  // chamber
+  ctx.fillStyle = "#eef3f9"; ctx.strokeStyle = METAL_D; ctx.lineWidth = 4;
+  roundRect(CH.x, CH.y, CH.w, CH.h, 14); ctx.fill(); ctx.stroke();
+  ctx.fillStyle = "#eef3f9"; pipeV(CH.y - 3, CH.y + 3, PX, 40); pipeV(CH.y + CH.h - 3, CH.y + CH.h + 3, PX, 44);
+  ctx.fillRect(CH.x - 3, 392, 6, 16);
+  // flowing water dots
+  const SPc = 20, SPb = 30;
+  wphC = (wphC + 260 * s.flow * dt) % SPc;
+  wphB = (wphB + 140 * Math.sqrt(s.turn) * dt) % SPb;
+  const len = p => p.slice(1).reduce((q, r, k) => q + Math.hypot(r[0] - p[k][0], r[1] - p[k][1]), 0);
+  if (s.flow > 0.001) { const L = len(PATH_C); for (let d = wphC; d < L; d += SPc) { const [x, y] = at(PATH_C, d);
+    ctx.fillStyle = "#1f6fd6"; ctx.beginPath(); ctx.arc(x + Math.sin(d) * 5 * Math.min(1, s.flow * 2), y, 5.5, 0, 7); ctx.fill(); } }
+  if (s.ib > 0) { const L = len(PATH_B); for (let d = wphB; d < L; d += SPb) { const [x, y] = at(PATH_B, d);
+    ctx.fillStyle = CB; ctx.beginPath(); ctx.arc(x, y, 4, 0, 7); ctx.fill(); } }
+  // emitter outflow stream into the bucket
+  const fe = Math.min(1, s.flow + (s.ib > 0 ? 0.05 : 0));
+  if (fe > 0.01) { ctx.fillStyle = "#7cc0f5"; ctx.globalAlpha = 0.6; const w = 6 + 30 * fe;
+    ctx.fillRect(PX - w / 2, 610, w, 20); ctx.globalAlpha = 1; }
+  // big flap (gate under the collector inlet), hinged on the left
+  const ang = th * 1.35;                                    // up to ~77 degrees down
+  const fl = 46, fx = HB[0] + fl * Math.cos(ang), fy = HB[1] + fl * Math.sin(ang);
+  poly([HB, [fx, fy]], "#d93636", 9);
+  ctx.fillStyle = INK; ctx.beginPath(); ctx.arc(HB[0], HB[1], 5, 0, 7); ctx.fill();
+  // small paddle in the base stream, hinged at the top, pushed to the right
+  const pa = th * 1.1, pl = 30;
+  const px = HS[0] + pl * Math.sin(pa), py = HS[1] + pl * Math.cos(pa);
+  poly([HS, [px, py]], CB, 7);
+  ctx.fillStyle = INK; ctx.beginPath(); ctx.arc(HS[0], HS[1], 4, 0, 7); ctx.fill();
+  // rod linking paddle to flap
+  const rx = HB[0] + 26 * Math.cos(ang), ry = HB[1] + 26 * Math.sin(ang);
+  poly([[px, py], [rx, ry]], METAL_D, 3);
+  // spring pulling the flap shut
+  const sx0 = fx, sy0 = fy, sx1 = CH.x + CH.w - 20, sy1 = CH.y + 14;
+  ctx.strokeStyle = "#7a5af5"; ctx.lineWidth = 2.5; ctx.beginPath(); ctx.moveTo(sx0, sy0);
+  for (let k = 1; k < 12; k++) { const t = k / 12, x = sx0 + (sx1 - sx0) * t, y = sy0 + (sy1 - sy0) * t;
+    const nx = -(sy1 - sy0), ny = sx1 - sx0, n = Math.hypot(nx, ny); ctx.lineTo(x + nx / n * (k % 2 ? 7 : -7), y + ny / n * (k % 2 ? 7 : -7)); }
+  ctx.lineTo(sx1, sy1); ctx.stroke();
   // bucket
   ctx.fillStyle = "#e8edf4"; ctx.strokeStyle = METAL_D; ctx.lineWidth = 3;
-  ctx.beginPath(); ctx.moveTo(380, 600); ctx.lineTo(528, 600); ctx.lineTo(512, 690); ctx.lineTo(396, 690); ctx.closePath(); ctx.fill(); ctx.stroke();
-  // labels mapping to the transistor
-  const lab = (t1, t2, x, y, col) => { text(t1, x, y, 18, col, "left", "bold"); text(t2, x, y + 22, 14, MUTED, "left"); };
-  lab("Collector (C)", "water comes in", 20, 330, CC);
-  lab("Base (B)", "small turn on the handle", 470, 140, CB);
-  lab("Emitter (E)", "water goes out", 540, 380, "#2f4f7f");
-  // flow gauge
-  text(f <= 0.001 ? "No flow" : f >= 0.999 ? "Full flow: the narrow pipe limits it" : "Flow " + Math.round(f * 100) + "%",
-       330, 725, 18, f >= 0.999 ? "#18a058" : f <= 0.001 ? MUTED : CC, "center", "bold");
-  if (s.region === 0 && s.vin > 0.05) text("handle is stiff: needs a push before it moves", 330, 670 - 300, 14, MUTED);
+  ctx.beginPath(); ctx.moveTo(PX - 74, 630); ctx.lineTo(PX + 74, 630); ctx.lineTo(PX + 58, 700); ctx.lineTo(PX - 58, 700); ctx.closePath(); ctx.fill(); ctx.stroke();
+  // labels
+  const lab = (t1, t2, x, y, col, al = "left") => { text(t1, x, y, 18, col, al, "bold"); text(t2, x, y + 22, 14, MUTED, al); };
+  lab("Collector (C)", "big pipe from the high tank", 460, 100, CC);
+  lab("Base (B)", "small pipe pushes the paddle", 20, 290, CB);
+  lab("Emitter (E)", "both flows leave here", 400, 560, "#2f4f7f");
+  lab("Spring", "needs 0.7 V first", 492, 330, "#7a5af5");
+  const f = s.flow;
+  text(f <= 0.001 ? "Flap shut: no flow" : f >= 0.999 ? "Flap wide open: the narrow pipe limits the flow" : "Big flow " + Math.round(f * 100) + "% of the maximum",
+       330, 730, 17, f >= 0.999 ? "#18a058" : f <= 0.001 ? MUTED : CC, "center", "bold");
 }
 
 // ================= RIGHT: the transistor circuit =================
@@ -266,8 +282,6 @@ function drawReadings(s) {
                  "Base current is more than enough: fully on, LED at full brightness"];
   text(notes[s.region], rx + rw / 2, ry + 76, 16, REG[s.region][1], "center", "bold");
   // same thing on the tap side
-  const tapNotes = ["Handle closed", "Handle part open", "Handle fully open"];
-  text(tapNotes[s.region], 330, 70, 16, REG[s.region][1], "center", "bold");
 }
 
 // ---------- loop ----------
