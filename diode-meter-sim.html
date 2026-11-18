@@ -1,0 +1,415 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Diode Knee Voltage</title>
+<style>
+  :root { --bg:#0f1420; --panel:#171e2e; --ink:#e8edf7; --muted:#8c97ad; --accent:#ffcc33; }
+  * { box-sizing:border-box; }
+  html,body { margin:0; height:100%; background:var(--bg); color:var(--ink);
+    font-family: "Segoe UI", Roboto, Arial, sans-serif; overflow:hidden; }
+  #wrap { position:absolute; inset:0; display:flex; flex-direction:column; }
+  #stage { flex:1; position:relative; }
+  canvas { position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); }
+  #bar { display:flex; gap:10px; align-items:center; flex-wrap:wrap; padding:10px 16px;
+    background:var(--panel); border-top:1px solid #263049; font-size:15px; }
+  #bar label { color:var(--muted); }
+  input[type=range] { width:260px; accent-color:var(--accent); }
+  button { background:#24304a; color:var(--ink); border:1px solid #344262; border-radius:6px;
+    padding:7px 12px; font-size:14px; cursor:pointer; }
+  button:hover { background:#2e3c5c; }
+  button.on { background:#3a4a20; border-color:#6a8a2a; }
+  .sp { flex:1; }
+  .keys { color:var(--muted); font-size:12px; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div id="stage"><canvas id="c"></canvas></div>
+  <div id="bar">
+    <label for="pot">Pot</label>
+    <input id="pot" type="range" min="0" max="1000" value="300">
+    <button id="rec">Record point (R)</button>
+    <button id="clr">Clear points</button>
+    <button id="curve">Show curve</button>
+    <button id="swap">Swap V<sub>R</sub> probes</button>
+    <button id="ele" class="on">Electrons (E)</button>
+    <button id="col" class="on">Voltage colours (C)</button>
+    <button id="rst">Reset</button>
+    <span class="sp"></span>
+    <span class="keys">Left / Right: pot &nbsp; Space: pause &nbsp; F: fullscreen &nbsp; Drag a probe tip to any dot</span>
+  </div>
+</div>
+<script>
+"use strict";
+// ---------- model: 5 V, 10k pot, 330 ohm, 1N4007 ----------
+const VS = 5, RPOT = 10000, RS = 330;
+const IS = 3e-9, NVT = 1.8 * 0.02585;
+const vd = i => NVT * Math.log(i / IS + 1);
+function solve(x) {
+  const vth = VS * x, rth = RPOT * x * (1 - x);
+  let lo = 0, hi = vth / RS + 1e-12;
+  for (let k = 0; k < 80; k++) {
+    const m = (lo + hi) / 2;
+    (vth - m * (rth + RS) - vd(m) > 0) ? lo = m : hi = m;
+  }
+  const iD = lo, vA = vth - iD * rth, vB = vd(iD);
+  const iBot = x > 0 ? vA / (RPOT * x) : 0;
+  return { x, iD, vA, vB, iBot, iTot: iBot + iD };
+}
+
+// ---------- canvas ----------
+const W = 1400, H = 760;
+const cv = document.getElementById("c"), ctx = cv.getContext("2d");
+function fit() {
+  const st = document.getElementById("stage");
+  const s = Math.min(st.clientWidth / W, st.clientHeight / H);
+  const dpr = window.devicePixelRatio || 1;
+  cv.style.width = W * s + "px"; cv.style.height = H * s + "px";
+  cv.width = W * s * dpr; cv.height = H * s * dpr;
+  ctx.setTransform(s * dpr, 0, 0, s * dpr, 0, 0);
+  fit.s = s;
+}
+window.addEventListener("resize", fit);
+
+// ---------- geometry ----------
+const BX = 120, TOPY = 150, GY = 600, PX = 340, POT0 = 260, POT1 = 480;
+const AX = 420, RY = 250, R0 = 470, R1 = 570, DX = 640, D0 = 380, D1 = 470;
+const wiperY = x => POT1 - x * (POT1 - POT0);
+
+const NODES = {
+  P: { x: 230, y: TOPY, name: "P" },
+  A: { x: AX, y: RY, name: "A" },
+  B: { x: DX, y: RY, name: "B" },
+  G: { x: DX, y: GY, name: "G" },
+  G2:{ x: 230, y: GY, name: "G" },
+};
+const nodeV = (k, s) => ({ P: VS, A: s.vA, B: s.vB, G: 0, G2: 0 })[k];
+
+const meters = [
+  { id: "R", label: "V", sub: "R", x: 430, y: 14, w: 230, h: 124, red: "A", com: "B", col: "#ffcc33" },
+  { id: "D", label: "V", sub: "D", x: 680, y: 300, w: 210, h: 124, red: "B", com: "G", col: "#4fd1c5" },
+];
+
+// ---------- state ----------
+let state = solve(0.3), points = [], showCurve = false, showEle = true, showCol = true, paused = false;
+let drag = null, mouse = { x: 0, y: 0 };
+
+// ---------- colour by potential ----------
+function vcol(v) {
+  if (!showCol) return "#c7cfdd";
+  const t = Math.max(0, Math.min(1, v / VS));
+  const h = 220 - 220 * t;            // blue (0 V) to red (5 V)
+  return `hsl(${h},90%,${55 + 5 * Math.sin(t * Math.PI)}%)`;
+}
+function line(pts, v, w = 5) {
+  ctx.strokeStyle = vcol(v); ctx.lineWidth = w; ctx.lineCap = "round"; ctx.lineJoin = "round";
+  ctx.beginPath(); ctx.moveTo(pts[0][0], pts[0][1]);
+  for (const p of pts.slice(1)) ctx.lineTo(p[0], p[1]);
+  ctx.stroke();
+}
+function gradSeg(x0, y0, x1, y1, v0, v1, draw) {
+  const g = ctx.createLinearGradient(x0, y0, x1, y1);
+  g.addColorStop(0, vcol(v0)); g.addColorStop(1, vcol(v1));
+  ctx.strokeStyle = g; ctx.fillStyle = g; draw();
+}
+function sub(main, s, x, y, size, color, align = "left") {
+  ctx.fillStyle = color; ctx.textBaseline = "alphabetic";
+  ctx.font = `bold ${size}px Segoe UI, Arial`;
+  const w1 = ctx.measureText(main).width;
+  ctx.font = `bold ${size * 0.62}px Segoe UI, Arial`;
+  const w2 = ctx.measureText(s).width;
+  let x0 = align === "center" ? x - (w1 + w2) / 2 : align === "right" ? x - w1 - w2 : x;
+  ctx.font = `bold ${size}px Segoe UI, Arial`; ctx.textAlign = "left";
+  ctx.fillText(main, x0, y);
+  ctx.font = `bold ${size * 0.62}px Segoe UI, Arial`;
+  ctx.fillText(s, x0 + w1 + 1, y + size * 0.25);
+}
+function text(t, x, y, size, color, align = "center", weight = "normal") {
+  ctx.fillStyle = color; ctx.font = `${weight} ${size}px Segoe UI, Arial`;
+  ctx.textAlign = align; ctx.textBaseline = "middle"; ctx.fillText(t, x, y);
+}
+
+// ---------- circuit ----------
+function drawCircuit(s) {
+  const yw = wiperY(s.x);
+  // wires
+  line([[BX, 200], [BX, TOPY], [PX, TOPY], [PX, POT0]], VS);
+  line([[BX, 560], [BX, GY], [DX, GY]], 0);
+  line([[PX, POT1], [PX, GY]], 0);
+  line([[PX + 30, yw], [AX, yw], [AX, RY], [R0, RY]], s.vA);
+  line([[R1, RY], [DX, RY], [DX, D0]], s.vB);
+  line([[DX, D1], [DX, GY]], 0);
+
+  // battery
+  ctx.lineCap = "butt";
+  for (let k = 0; k < 4; k++) {
+    const y = 300 + k * 40;
+    ctx.strokeStyle = "#e8edf7"; ctx.lineWidth = 5;
+    ctx.beginPath(); ctx.moveTo(BX - 34, y); ctx.lineTo(BX + 34, y); ctx.stroke();
+    ctx.lineWidth = 10; ctx.beginPath(); ctx.moveTo(BX - 16, y + 18); ctx.lineTo(BX + 16, y + 18); ctx.stroke();
+  }
+  gradSeg(BX, 200, BX, 300, VS, VS, () => { ctx.lineWidth = 5; ctx.beginPath(); ctx.moveTo(BX, 200); ctx.lineTo(BX, 300); ctx.stroke(); });
+  gradSeg(BX, 438, BX, 560, 0, 0, () => { ctx.lineWidth = 5; ctx.beginPath(); ctx.moveTo(BX, 438); ctx.lineTo(BX, 560); ctx.stroke(); });
+  text("+", BX - 50, 296, 30, "#ff6b6b", "center", "bold");
+  text("−", BX - 50, 440, 30, "#6ba8ff", "center", "bold");
+  text("5 V", BX + 70, 370, 24, "#e8edf7", "center", "bold");
+
+  // pot: two gradients split at wiper
+  const zig = (y0, y1, x) => { ctx.lineWidth = 5; ctx.beginPath(); ctx.moveTo(x, y0);
+    const n = 8, h = (y1 - y0) / n; for (let k = 0; k < n; k++) ctx.lineTo(x + (k % 2 ? -16 : 16), y0 + h * (k + 0.5)); ctx.lineTo(x, y1); ctx.stroke(); };
+  ctx.save(); ctx.beginPath(); ctx.rect(PX - 40, POT0 - 2, 80, yw - POT0 + 2); ctx.clip();
+  gradSeg(PX, POT0, PX, yw, VS, s.vA, () => zig(POT0, POT1, PX)); ctx.restore();
+  ctx.save(); ctx.beginPath(); ctx.rect(PX - 40, yw, 80, POT1 - yw + 2); ctx.clip();
+  gradSeg(PX, yw, PX, POT1, s.vA, 0, () => zig(POT0, POT1, PX)); ctx.restore();
+  // wiper arrow
+  ctx.fillStyle = vcol(s.vA); ctx.beginPath();
+  ctx.moveTo(PX + 18, yw); ctx.lineTo(PX + 36, yw - 9); ctx.lineTo(PX + 36, yw + 9); ctx.fill();
+  text("10 kΩ", PX - 62, 370, 20, "#e8edf7");
+  text("pot", PX - 62, 394, 16, "#8c97ad");
+
+  // resistor
+  gradSeg(R0, RY, R1, RY, s.vA, s.vB, () => { ctx.lineWidth = 5; ctx.beginPath(); ctx.moveTo(R0, RY);
+    const n = 8, w = (R1 - R0) / n; for (let k = 0; k < n; k++) ctx.lineTo(R0 + w * (k + 0.5), RY + (k % 2 ? 14 : -14)); ctx.lineTo(R1, RY); ctx.stroke(); });
+  text("330 Ω", (R0 + R1) / 2, RY + 40, 20, "#e8edf7");
+
+  // diode (anode top)
+  gradSeg(DX, D0, DX, D1, s.vB, 0, () => {
+    ctx.lineWidth = 5; ctx.beginPath(); ctx.moveTo(DX, D0); ctx.lineTo(DX, D1); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(DX - 26, D0 + 18); ctx.lineTo(DX + 26, D0 + 18); ctx.lineTo(DX, D0 + 62); ctx.closePath(); ctx.fill();
+  });
+  ctx.strokeStyle = vcol(0); ctx.lineWidth = 6; ctx.beginPath(); ctx.moveTo(DX - 26, D0 + 64); ctx.lineTo(DX + 26, D0 + 64); ctx.stroke();
+  text("1N4007", DX - 70, 425, 18, "#e8edf7");
+
+  // ground symbol
+  const gx = 480; ctx.strokeStyle = "#c7cfdd"; ctx.lineWidth = 3;
+  ctx.beginPath(); ctx.moveTo(gx, GY); ctx.lineTo(gx, GY + 22); ctx.stroke();
+  [[26, 22], [17, 31], [8, 40]].forEach(([w, y]) => { ctx.beginPath(); ctx.moveTo(gx - w, GY + y); ctx.lineTo(gx + w, GY + y); ctx.stroke(); });
+  text("0 V (common)", gx, GY + 64, 17, "#8c97ad");
+
+  // nodes
+  for (const [k, n] of Object.entries(NODES)) {
+    ctx.fillStyle = "#fff"; ctx.beginPath(); ctx.arc(n.x, n.y, 7, 0, 7); ctx.fill();
+    ctx.strokeStyle = "#0f1420"; ctx.lineWidth = 2; ctx.stroke();
+    if (k === "G2") continue;
+    const off = { P: [0, -24], A: [-22, -22], B: [22, -22], G: [22, 22] }[k];
+    text(n.name, n.x + off[0], n.y + off[1], 18, "#ffffff", "center", "bold");
+  }
+}
+
+// ---------- electrons ----------
+// paths in direction of electron travel (from battery minus, back to battery plus)
+function paths(s) {
+  const yw = wiperY(s.x);
+  return [
+    { i: s.iTot, pts: [[BX, 560], [BX, GY], [PX, GY]] },
+    { i: s.iD,   pts: [[PX, GY], [DX, GY], [DX, RY], [AX, RY], [AX, yw], [PX, yw]] },
+    { i: s.iBot, pts: [[PX, GY], [PX, yw]] },
+    { i: s.iTot, pts: [[PX, yw], [PX, TOPY], [BX, TOPY], [BX, 200]] },
+  ];
+}
+const phase = [0, 0, 0, 0];
+function polyLen(p) { let L = 0; for (let k = 1; k < p.length; k++) L += Math.hypot(p[k][0] - p[k - 1][0], p[k][1] - p[k - 1][1]); return L; }
+function pointAt(p, d) {
+  for (let k = 1; k < p.length; k++) {
+    const l = Math.hypot(p[k][0] - p[k - 1][0], p[k][1] - p[k - 1][1]);
+    if (d <= l) { const t = d / l; return [p[k - 1][0] + (p[k][0] - p[k - 1][0]) * t, p[k - 1][1] + (p[k][1] - p[k - 1][1]) * t]; }
+    d -= l;
+  }
+  return p[p.length - 1];
+}
+const speed = i => 46 * Math.sqrt(Math.max(0, i) * 1000);   // px/s, i in A
+function drawElectrons(s, dt) {
+  if (!showEle) return;
+  const SP = 26;
+  paths(s).forEach((p, k) => {
+    if (!paused) phase[k] = (phase[k] + speed(p.i) * dt) % SP;
+    if (p.i < 2e-6) return;
+    const L = polyLen(p.pts);
+    for (let d = phase[k]; d < L; d += SP) {
+      const [x, y] = pointAt(p.pts, d);
+      ctx.fillStyle = "#7fd3ff"; ctx.beginPath(); ctx.arc(x, y, 6, 0, 7); ctx.fill();
+      ctx.fillStyle = "#0b2a44"; ctx.fillRect(x - 3.5, y - 1, 7, 2);
+    }
+  });
+}
+
+// ---------- meters ----------
+function jack(m, which) { return which === "red" ? [m.x + m.w * 0.86, m.y + m.h] : [m.x + m.w * 0.62, m.y + m.h]; }
+function tip(m, which) {
+  if (drag && drag.m === m && drag.which === which) return [mouse.x, mouse.y];
+  const n = NODES[m[which]]; return [n.x, n.y];
+}
+function probeWire(m, which) {
+  const [jx, jy] = jack(m, which), [tx, ty] = tip(m, which);
+  ctx.strokeStyle = which === "red" ? "#ff3b3b" : "#1a1a1a"; ctx.lineWidth = 4;
+  if (which === "com") { ctx.strokeStyle = "#111"; ctx.lineWidth = 6; ctx.beginPath(); ctx.moveTo(jx, jy);
+    ctx.bezierCurveTo(jx, jy + 60, tx, ty - 70, tx, ty - 14); ctx.stroke(); ctx.strokeStyle = "#555"; ctx.lineWidth = 3; }
+  ctx.beginPath(); ctx.moveTo(jx, jy); ctx.bezierCurveTo(jx, jy + 60, tx, ty - 70, tx, ty - 14); ctx.stroke();
+  // probe tip
+  ctx.fillStyle = which === "red" ? "#ff3b3b" : "#333"; ctx.strokeStyle = "#fff"; ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.moveTo(tx - 6, ty - 26); ctx.lineTo(tx + 6, ty - 26); ctx.lineTo(tx + 2, ty - 6); ctx.lineTo(tx, ty); ctx.lineTo(tx - 2, ty - 6); ctx.closePath(); ctx.fill(); ctx.stroke();
+}
+function reading(m, s) {
+  const r = nodeV(m.red, s), c = nodeV(m.com, s);
+  return { r, c, v: r - c };
+}
+function drawMeter(m, s) {
+  const { r, c, v } = reading(m, s);
+  ctx.fillStyle = m.col; roundRect(m.x, m.y, m.w, m.h, 12); ctx.fill();
+  ctx.fillStyle = "#0e1a12"; roundRect(m.x + 12, m.y + 10, m.w - 24, 46, 6); ctx.fill();
+  ctx.fillStyle = "#9dff9d"; ctx.font = "bold 34px Consolas, monospace"; ctx.textAlign = "right"; ctx.textBaseline = "middle";
+  ctx.fillText((v < 0 ? "-" : " ") + Math.abs(v).toFixed(3), m.x + m.w - 46, m.y + 34);
+  ctx.font = "bold 16px Segoe UI, Arial"; ctx.fillText("V", m.x + m.w - 22, m.y + 38);
+  sub(m.label, m.sub, m.x + 14, m.y + m.h - 14, 22, "#111");
+  ctx.fillStyle = "#111"; ctx.font = "bold 12px Segoe UI, Arial"; ctx.textAlign = "center";
+  ctx.fillText("COM", jack(m, "com")[0], m.y + m.h - 30);
+  ctx.fillText("V", jack(m, "red")[0], m.y + m.h - 30);
+  [["com", "#111"], ["red", "#ff3b3b"]].forEach(([w, col]) => { const [x, y] = jack(m, w);
+    ctx.fillStyle = col; ctx.beginPath(); ctx.arc(x, y - 12, 8, 0, 7); ctx.fill(); });
+  // the subtraction: red minus COM
+  ctx.textAlign = "left"; ctx.textBaseline = "middle"; ctx.font = "bold 14px Segoe UI, Arial";
+  const ly = m.y + 70; let lx = m.x + 14;
+  const part = (t, c) => { ctx.fillStyle = c; ctx.fillText(t, lx, ly); lx += ctx.measureText(t).width; };
+  part("red " + r.toFixed(2), "#b00000"); part("  \u2212  ", "#111"); part("COM " + c.toFixed(2), "#111");
+}
+function roundRect(x, y, w, h, r) {
+  ctx.beginPath(); ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath();
+}
+
+// ---------- voltage ladder ----------
+function drawLadder(s) {
+  const x0 = 960, x1 = 1060, yTop = 120, yBot = 620;
+  const yOf = v => yBot - (v / VS) * (yBot - yTop);
+  text("Voltage level", (x0 + x1) / 2 - 10, 70, 19, "#e8edf7", "center", "bold");
+  text("of each point", (x0 + x1) / 2 - 10, 92, 15, "#8c97ad");
+  // scale
+  ctx.strokeStyle = "#344262"; ctx.lineWidth = 1;
+  for (let v = 0; v <= VS; v++) { const y = yOf(v); ctx.beginPath(); ctx.moveTo(x0 - 30, y); ctx.lineTo(x1, y); ctx.stroke();
+    text(v + " V", x0 - 48, y, 13, "#5d6882"); }
+  // colour bar
+  for (let k = 0; k < 100; k++) { const v = k / 100 * VS; ctx.fillStyle = vcol(v);
+    ctx.fillRect(x0 - 22, yOf(v + VS / 100), 10, (yBot - yTop) / 100 + 1); }
+  // node levels
+  const lv = [["P", VS], ["A", s.vA], ["B", s.vB], ["G", 0]];
+  lv.forEach(([n, v], k) => { const y = yOf(v);
+    ctx.strokeStyle = "#ffffff"; ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(x0, y); ctx.lineTo(x1, y); ctx.stroke();
+    text(n, x0 + 10 + k * 26, y - 11, 15, "#ffffff", "left", "bold"); });
+  // meter brackets
+  meters.forEach((m, k) => {
+    const { r, c, v } = reading(m, s), bx = x1 + 18 + k * 44;
+    const yr = yOf(r), yc = yOf(c);
+    ctx.strokeStyle = m.col; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.moveTo(bx - 8, yc); ctx.lineTo(bx, yc); ctx.lineTo(bx, yr); ctx.lineTo(bx - 8, yr); ctx.stroke();
+    ctx.fillStyle = "#ff3b3b"; ctx.beginPath(); ctx.arc(bx, yr, 5, 0, 7); ctx.fill();
+    ctx.fillStyle = "#222"; ctx.strokeStyle = "#aaa"; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.arc(bx, yc, 5, 0, 7); ctx.fill(); ctx.stroke();
+    sub(m.label, m.sub, bx + 6, Math.min(yr, yc) - 12, 17, m.col, "center");
+  });
+  text("gap from COM to red", (x0 + x1) / 2 + 10, 655, 15, "#8c97ad"); text("= meter reading", (x0 + x1) / 2 + 10, 675, 15, "#8c97ad");
+}
+
+// ---------- V-I plot ----------
+function drawGraph(s) {
+  const gx = 1215, gy = 120, gw = 160, gh = 330;
+  const VMAX = 0.8, IMAX = 15;
+  const px = v => gx + (v / VMAX) * gw, py = i => gy + gh - (i / IMAX) * gh;
+  text("Diode curve", gx + gw / 2, 70, 19, "#e8edf7", "center", "bold");
+  ctx.strokeStyle = "#344262"; ctx.lineWidth = 1;
+  for (let v = 0; v <= VMAX + 1e-9; v += 0.2) { ctx.beginPath(); ctx.moveTo(px(v), gy); ctx.lineTo(px(v), gy + gh); ctx.stroke();
+    text(v.toFixed(1), px(v), gy + gh + 14, 12, "#5d6882"); }
+  for (let i = 0; i <= IMAX; i += 5) { ctx.beginPath(); ctx.moveTo(gx, py(i)); ctx.lineTo(gx + gw, py(i)); ctx.stroke();
+    text(String(i), gx - 14, py(i), 12, "#5d6882"); }
+  ctx.strokeStyle = "#c7cfdd"; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(gx, gy); ctx.lineTo(gx, gy + gh); ctx.lineTo(gx + gw, gy + gh); ctx.stroke();
+  sub("V", "D", gx + gw / 2 - 16, gy + gh + 40, 15, "#c7cfdd"); text("(V)", gx + gw / 2 + 14, gy + gh + 36, 13, "#8c97ad");
+  ctx.save(); ctx.translate(gx - 36, gy + gh / 2); ctx.rotate(-Math.PI / 2);
+  sub("I", "D", -22, 5, 15, "#c7cfdd"); ctx.fillStyle = "#8c97ad"; ctx.font = "13px Segoe UI"; ctx.fillText("(mA)", 2, 4); ctx.restore();
+  if (showCurve) {
+    ctx.strokeStyle = "rgba(255,204,51,0.55)"; ctx.lineWidth = 2; ctx.beginPath();
+    for (let k = 0; k <= 200; k++) { const i = IMAX * 1e-3 * Math.pow(k / 200, 2); const v = vd(i);
+      k ? ctx.lineTo(px(v), py(i * 1e3)) : ctx.moveTo(px(v), py(i * 1e3)); } ctx.stroke();
+  }
+  points.forEach(p => { ctx.fillStyle = "#ffcc33"; ctx.beginPath(); ctx.arc(px(p.v), py(p.i), 4.5, 0, 7); ctx.fill(); });
+  const cx = px(Math.min(s.vB, VMAX)), cy = py(Math.min(s.iD * 1e3, IMAX));
+  ctx.strokeStyle = "#ffffff"; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(cx, cy, 8, 0, 7); ctx.stroke();
+
+  // calculation box
+  const bx = 1160, by = 530;
+  ctx.fillStyle = "#171e2e"; roundRect(bx, by, 228, 190, 10); ctx.fill();
+  ctx.strokeStyle = "#263049"; ctx.lineWidth = 1; ctx.stroke();
+  const vr = s.vA - s.vB;
+  sub("I", "D", bx + 16, by + 38, 22, "#ffffff"); text("= ", bx + 58, by + 32, 22, "#ffffff", "center", "bold");
+  sub("V", "R", bx + 76, by + 24, 18, "#ffcc33"); ctx.fillStyle = "#fff"; ctx.fillRect(bx + 72, by + 32, 34, 2);
+  text("R", bx + 89, by + 48, 18, "#ffffff", "center", "bold");
+  text("= " + vr.toFixed(2) + " V / 330 Ω", bx + 112, by + 36, 14, "#e8edf7", "left");
+  text("= " + (s.iD * 1e3).toFixed(2) + " mA", bx + 70, by + 82, 24, "#ffcc33", "left", "bold");
+  sub("V", "D", bx + 16, by + 128, 22, "#4fd1c5");
+  text("= " + s.vB.toFixed(3) + " V", bx + 70, by + 122, 24, "#4fd1c5", "left", "bold");
+  text("points recorded: " + points.length, bx + 122, by + 166, 14, "#8c97ad");
+}
+
+// ---------- loop ----------
+let last = performance.now();
+function frame(t) {
+  const dt = Math.min(0.05, (t - last) / 1000); last = t;
+  ctx.fillStyle = "#0f1420"; ctx.fillRect(0, 0, W, H);
+  drawCircuit(state);
+  drawElectrons(state, dt);
+  meters.forEach(m => { probeWire(m, "com"); probeWire(m, "red"); });
+  meters.forEach(m => drawMeter(m, state));
+  ctx.strokeStyle = "#263049"; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(905, 40); ctx.lineTo(905, 720); ctx.stroke();
+  drawLadder(state);
+  drawGraph(state);
+  text("Electrons flow from − to +. A meter only compares two points: reading = V(red) − V(COM)",
+       450, 735, 17, "#8c97ad");
+  if (paused) text("PAUSED", 120, 40, 20, "#ff6b6b", "center", "bold");
+  requestAnimationFrame(frame);
+}
+
+// ---------- input ----------
+const pot = document.getElementById("pot");
+const setPot = v => { pot.value = v; state = solve(pot.value / 1000); };
+pot.addEventListener("input", () => setPot(pot.value));
+function toCanvas(e) { const r = cv.getBoundingClientRect(); return { x: (e.clientX - r.left) / fit.s, y: (e.clientY - r.top) / fit.s }; }
+cv.addEventListener("pointerdown", e => {
+  const p = toCanvas(e); mouse = p;
+  for (const m of meters) for (const w of ["red", "com"]) {
+    const [tx, ty] = tip(m, w);
+    if (Math.hypot(p.x - tx, p.y - (ty - 14)) < 26) { drag = { m, which: w }; cv.setPointerCapture(e.pointerId); return; }
+  }
+});
+cv.addEventListener("pointermove", e => { mouse = toCanvas(e); cv.style.cursor = drag ? "grabbing" : "default"; });
+cv.addEventListener("pointerup", () => {
+  if (!drag) return;
+  let best = null, bd = 60;
+  for (const [k, n] of Object.entries(NODES)) { const d = Math.hypot(mouse.x - n.x, mouse.y - n.y); if (d < bd) { bd = d; best = k; } }
+  if (best) drag.m[drag.which] = best;
+  drag = null;
+});
+function toggle(btn, flag) { btn.classList.toggle("on", flag); }
+const $ = id => document.getElementById(id);
+const record = () => { points.push({ v: state.vB, i: state.iD * 1e3 }); };
+$("rec").onclick = record;
+$("clr").onclick = () => { points = []; };
+$("curve").onclick = () => { showCurve = !showCurve; toggle($("curve"), showCurve); };
+$("swap").onclick = () => { const m = meters[0]; [m.red, m.com] = [m.com, m.red]; };
+$("ele").onclick = () => { showEle = !showEle; toggle($("ele"), showEle); };
+$("col").onclick = () => { showCol = !showCol; toggle($("col"), showCol); };
+$("rst").onclick = () => { meters[0].red = "A"; meters[0].com = "B"; meters[1].red = "B"; meters[1].com = "G";
+  points = []; showCurve = false; toggle($("curve"), false); setPot(300); };
+window.addEventListener("keydown", e => {
+  if (e.key === "ArrowRight") setPot(Math.min(1000, +pot.value + 10));
+  else if (e.key === "ArrowLeft") setPot(Math.max(0, +pot.value - 10));
+  else if (e.key === "r" || e.key === "R") record();
+  else if (e.key === "e" || e.key === "E") $("ele").click();
+  else if (e.key === "c" || e.key === "C") $("col").click();
+  else if (e.key === " ") { paused = !paused; e.preventDefault(); }
+  else if (e.key === "f" || e.key === "F") { document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen(); }
+  else return;
+  if (document.activeElement && document.activeElement.tagName === "BUTTON") document.activeElement.blur();
+});
+fit(); requestAnimationFrame(frame);
+</script>
+</body>
+</html>

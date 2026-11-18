@@ -1,0 +1,716 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Semiconductor Simulation</title>
+<style>
+  :root {
+    --bg: #0e1726;
+    --bar: #121f33;
+    --text: #e8eef7;
+    --dim: #8aa0b8;
+    --accent: #4fc3ff;
+    --btn: #1d2f4a;
+    --btn-on: #2e6da4;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+    font-family: "Segoe UI", Roboto, system-ui, sans-serif; overflow: hidden; }
+  #wrap { position: fixed; inset: 0 0 76px 0; }
+  canvas { display: block; width: 100%; height: 100%; }
+  #bar { position: fixed; left: 0; right: 0; bottom: 0; height: 76px; background: var(--bar);
+    display: flex; align-items: center; gap: 12px; padding: 0 18px; border-top: 1px solid #23395a; }
+  button { background: var(--btn); color: var(--text); border: 1px solid #2c4568; border-radius: 8px;
+    font-size: 18px; padding: 10px 16px; cursor: pointer; font-weight: 600; }
+  button:hover { background: #26405f; }
+  button.on { background: var(--btn-on); border-color: #4b8fd0; }
+  #controls { display: flex; align-items: center; gap: 12px; flex: 1; justify-content: center; }
+  #dots { display: flex; gap: 6px; }
+  #dots button { width: 40px; padding: 10px 0; }
+  input[type=range] { width: 300px; accent-color: var(--accent); }
+  .val { font-size: 22px; font-weight: 700; min-width: 110px; text-align: left; }
+  .hint { color: var(--dim); font-size: 14px; }
+</style>
+</head>
+<body>
+<div id="wrap"><canvas id="c"></canvas></div>
+<div id="bar">
+  <button id="back">Back</button>
+  <div id="dots"></div>
+  <div id="controls"></div>
+  <span class="hint">Next: Right / PageDown &nbsp; P: pause &nbsp; F: full screen &nbsp; R: reset</span>
+  <button id="next">Next</button>
+</div>
+<script>
+"use strict";
+// ---------------------------------------------------------------- setup
+const W = 1600, H = 820;
+const cv = document.getElementById("c");
+const ctx = cv.getContext("2d");
+let scale = 1, offX = 0, offY = 0;
+function resize() {
+  const r = cv.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  cv.width = Math.round(r.width * dpr);
+  cv.height = Math.round(r.height * dpr);
+  scale = Math.min(r.width / W, r.height / H);
+  offX = (r.width - W * scale) / 2;
+  offY = (r.height - H * scale) / 2;
+  ctx.setTransform(dpr * scale, 0, 0, dpr * scale, dpr * offX, dpr * offY);
+}
+window.addEventListener("resize", resize);
+
+const C = {
+  text: "#e8eef7", dim: "#8aa0b8", e: "#4fc3ff", hole: "#ff6b6b",
+  copper: "#d9894a", ins: "#7d8a99", wire: "#9aa9bb", pos: "#ff6b6b", neg: "#4fc3ff",
+  pFill: "rgba(255,107,107,0.13)", nFill: "rgba(79,195,255,0.13)", gold: "#ffd166",
+  si: "#9fb3c8", P: "#4fc3ff", B: "#ff8a65", atom: "#22344f"
+};
+const rand = (a, b) => a + Math.random() * (b - a);
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const dist = (a, b, c, d) => Math.hypot(a - c, b - d);
+
+function text(s, x, y, size = 22, color = C.text, align = "left", weight = "600") {
+  ctx.font = `${weight} ${size}px "Segoe UI", Roboto, system-ui, sans-serif`;
+  ctx.fillStyle = color; ctx.textAlign = align; ctx.textBaseline = "middle";
+  ctx.fillText(s, x, y);
+}
+function electron(x, y, r = 7) {
+  ctx.beginPath(); ctx.arc(x, y, r, 0, 7); ctx.fillStyle = C.e; ctx.fill();
+  ctx.strokeStyle = "#0e1726"; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.moveTo(x - r * 0.5, y); ctx.lineTo(x + r * 0.5, y); ctx.stroke();
+}
+function hole(x, y, r = 8) {
+  ctx.beginPath(); ctx.arc(x, y, r, 0, 7); ctx.strokeStyle = C.hole; ctx.lineWidth = 2.5; ctx.stroke();
+  ctx.lineWidth = 2; ctx.beginPath();
+  ctx.moveTo(x - r * 0.45, y); ctx.lineTo(x + r * 0.45, y);
+  ctx.moveTo(x, y - r * 0.45); ctx.lineTo(x, y + r * 0.45); ctx.stroke();
+}
+function ion(x, y, sign, bright) {
+  const col = sign > 0 ? C.pos : C.neg;
+  ctx.globalAlpha = bright ? 1 : 0.28;
+  ctx.fillStyle = sign > 0 ? "rgba(255,107,107,0.25)" : "rgba(79,195,255,0.25)";
+  ctx.strokeStyle = col; ctx.lineWidth = 2;
+  ctx.fillRect(x - 9, y - 9, 18, 18); ctx.strokeRect(x - 9, y - 9, 18, 18);
+  ctx.beginPath(); ctx.moveTo(x - 5, y); ctx.lineTo(x + 5, y);
+  if (sign > 0) { ctx.moveTo(x, y - 5); ctx.lineTo(x, y + 5); }
+  ctx.stroke(); ctx.globalAlpha = 1;
+}
+function line(pts, color = C.wire, w = 4) {
+  ctx.strokeStyle = color; ctx.lineWidth = w; ctx.lineJoin = "round"; ctx.beginPath();
+  ctx.moveTo(pts[0][0], pts[0][1]);
+  for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
+  ctx.stroke();
+}
+function battery(x, y, plusLeft, label) {
+  // two plates around (x, y); long plate = +
+  const lx = x - 14, rx = x + 14;
+  ctx.strokeStyle = C.text; ctx.lineCap = "butt";
+  const plate = (px, long) => { ctx.lineWidth = long ? 5 : 9; ctx.beginPath();
+    ctx.moveTo(px, y - (long ? 36 : 20)); ctx.lineTo(px, y + (long ? 36 : 20)); ctx.stroke(); };
+  plate(lx, plusLeft); plate(rx, !plusLeft);
+  text(plusLeft ? "+" : "−", lx - 22, y - 44, 30, plusLeft ? C.pos : C.neg, "center", "800");
+  text(plusLeft ? "−" : "+", rx + 22, y - 44, 30, plusLeft ? C.neg : C.pos, "center", "800");
+  if (label) text(label, x, y + 62, 22, C.text, "center", "700");
+}
+// path helper for wire electrons
+function makePath(pts) {
+  const seg = []; let L = 0;
+  for (let i = 1; i < pts.length; i++) {
+    const l = dist(pts[i - 1][0], pts[i - 1][1], pts[i][0], pts[i][1]);
+    seg.push({ a: pts[i - 1], b: pts[i], l, s0: L }); L += l;
+  }
+  return { pts, seg, L };
+}
+function pathAt(p, s) {
+  s = ((s % p.L) + p.L) % p.L;
+  for (const g of p.seg) if (s <= g.s0 + g.l) {
+    const t = (s - g.s0) / g.l; return [g.a[0] + (g.b[0] - g.a[0]) * t, g.a[1] + (g.b[1] - g.a[1]) * t];
+  }
+  return p.pts[p.pts.length - 1];
+}
+class WireFlow {
+  constructor(path, spacing = 34) { this.p = path; this.n = Math.floor(path.L / spacing); this.s = 0; }
+  update(dt, speed) { this.s += speed * dt; }
+  draw() { for (let i = 0; i < this.n; i++) { const q = pathAt(this.p, this.s + i * this.p.L / this.n); electron(q[0], q[1], 5); } }
+}
+let flashes = [];
+function flash(x, y, col = C.gold) { flashes.push({ x, y, t: 0, col }); }
+function drawFlashes(dt) {
+  flashes = flashes.filter(f => (f.t += dt) < 0.6);
+  for (const f of flashes) {
+    ctx.globalAlpha = 1 - f.t / 0.6; ctx.strokeStyle = f.col; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.arc(f.x, f.y, 6 + f.t * 45, 0, 7); ctx.stroke(); ctx.globalAlpha = 1;
+  }
+}
+function walk(p, dt, sp = 55) {
+  p.vx += rand(-1, 1) * 260 * dt; p.vy += rand(-1, 1) * 260 * dt;
+  const v = Math.hypot(p.vx, p.vy); if (v > sp) { p.vx *= sp / v; p.vy *= sp / v; }
+  p.x += p.vx * dt; p.y += p.vy * dt;
+}
+function bounce(p, x0, x1, y0, y1) {
+  if (p.x < x0) { p.x = x0; p.vx = Math.abs(p.vx); }
+  if (p.x > x1) { p.x = x1; p.vx = -Math.abs(p.vx); }
+  if (p.y < y0) { p.y = y0; p.vy = Math.abs(p.vy); }
+  if (p.y > y1) { p.y = y1; p.vy = -Math.abs(p.vy); }
+}
+function moveTo(p, tx, ty, sp, dt) {
+  const d = dist(p.x, p.y, tx, ty); if (d < 1e-3) return true;
+  const k = Math.min(1, sp * dt / d); p.x += (tx - p.x) * k; p.y += (ty - p.y) * k;
+  return d <= sp * dt;
+}
+function legend(items, x, y) {
+  let cx = x;
+  for (const [kind, label] of items) {
+    if (kind === "e") electron(cx, y); else if (kind === "h") hole(cx, y);
+    else if (kind === "-") ion(cx, y, -1, true); else if (kind === "+") ion(cx, y, 1, true);
+    text(label, cx + 18, y, 18, C.dim); cx += 34 + label.length * 9.5;
+  }
+}
+
+// ---------------------------------------------------------------- scene 1: conductor vs insulator
+class Conductor {
+  constructor() { this.reset(); }
+  reset() {
+    this.on = false;
+    this.cu = { x0: 330, x1: 1270, y0: 190, y1: 300 };
+    this.in = { x0: 330, x1: 1270, y0: 480, y1: 590 };
+    this.cores = []; this.atoms = [];
+    for (let x = 360; x < 1260; x += 56) for (let y = 215; y < 300; y += 42) this.cores.push([x, y]);
+    for (let x = 360; x < 1260; x += 72) for (let y = 510; y < 590; y += 52) this.atoms.push({ x, y, a: rand(0, 6.28) });
+    this.free = [];
+    for (let i = 0; i < 60; i++) this.free.push({ x: rand(340, 1260), y: rand(200, 290), vx: rand(-60, 60), vy: rand(-60, 60) });
+    const bx = 800, by = 730;
+    this.batt = [bx, by];
+    this.pathR = makePath([[1270, 245], [1360, 245], [1360, by], [bx + 14, by]]);   // bar right to + terminal
+    this.pathL = makePath([[bx - 14, by], [240, by], [240, 245], [330, 245]]);       // - terminal to bar left
+    this.flowR = new WireFlow(this.pathR); this.flowL = new WireFlow(this.pathL);
+  }
+  step(i) { this.on = i >= 1; }
+  update(dt) {
+    const drift = this.on ? 90 : 0;
+    for (const p of this.free) {
+      walk(p, dt, 110);
+      p.x += drift * dt;
+      if (this.on && p.x > this.cu.x1 - 6) { p.x = this.cu.x0 + 6; }
+      bounce(p, this.cu.x0 + 6, this.cu.x1 - 6, this.cu.y0 + 6, this.cu.y1 - 6);
+    }
+    for (const a of this.atoms) a.a += dt * 3;
+    const sp = this.on ? 90 : 0;
+    this.flowR.update(dt, sp); this.flowL.update(dt, sp);
+  }
+  draw() {
+    const { cu, in: ins } = this;
+    // wires
+    line(this.pathR.pts); line(this.pathL.pts);
+    line([[1270, 535], [1360, 535]]); line([[240, 535], [330, 535]]);
+    // switch on left wire
+    const [bx, by] = this.batt;
+    ctx.fillStyle = "#0e1726"; ctx.fillRect(470, by - 10, 60, 20);
+    ctx.fillStyle = C.wire; ctx.beginPath(); ctx.arc(470, by, 6, 0, 7); ctx.arc(530, by, 6, 0, 7); ctx.fill();
+    ctx.strokeStyle = C.text; ctx.lineWidth = 5; ctx.beginPath(); ctx.moveTo(470, by);
+    if (this.on) ctx.lineTo(530, by); else ctx.lineTo(522, by - 34); ctx.stroke();
+    text(this.on ? "switch ON" : "switch OFF", 500, by + 34, 18, this.on ? C.gold : C.dim, "center");
+    battery(bx, by, false, "Battery");
+    // copper
+    ctx.fillStyle = "rgba(217,137,74,0.16)"; ctx.fillRect(cu.x0, cu.y0, cu.x1 - cu.x0, cu.y1 - cu.y0);
+    ctx.strokeStyle = C.copper; ctx.lineWidth = 3; ctx.strokeRect(cu.x0, cu.y0, cu.x1 - cu.x0, cu.y1 - cu.y0);
+    for (const [x, y] of this.cores) { ctx.beginPath(); ctx.arc(x, y, 9, 0, 7); ctx.fillStyle = "rgba(217,137,74,0.55)"; ctx.fill();
+      text("+", x, y + 1, 14, "#fff", "center", "800"); }
+    for (const p of this.free) electron(p.x, p.y);
+    text("Copper: conductor", cu.x0, cu.y0 - 24, 24, C.copper, "left", "700");
+    // insulator
+    ctx.fillStyle = "rgba(125,138,153,0.14)"; ctx.fillRect(ins.x0, ins.y0, ins.x1 - ins.x0, ins.y1 - ins.y0);
+    ctx.strokeStyle = C.ins; ctx.lineWidth = 3; ctx.strokeRect(ins.x0, ins.y0, ins.x1 - ins.x0, ins.y1 - ins.y0);
+    for (const a of this.atoms) {
+      const sx = this.on ? 4 : 0;
+      ctx.beginPath(); ctx.arc(a.x, a.y, 10, 0, 7); ctx.fillStyle = "rgba(160,170,185,0.6)"; ctx.fill();
+      ctx.strokeStyle = "rgba(160,170,185,0.35)"; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.arc(a.x + sx, a.y, 19, 0, 7); ctx.stroke();
+      electron(a.x + sx + 19 * Math.cos(a.a), a.y + 19 * Math.sin(a.a), 5);
+      electron(a.x + sx + 19 * Math.cos(a.a + Math.PI), a.y + 19 * Math.sin(a.a + Math.PI), 5);
+    }
+    text("Insulator: electrons held in their atoms", ins.x0, ins.y0 - 24, 24, C.si, "left", "700");
+    // wire electrons
+    for (const p of [[240, 535], [270, 535], [300, 535], [1300, 535], [1330, 535]]) electron(p[0], p[1], 5);
+    this.flowR.draw(); this.flowL.draw();
+    // meters
+    const I1 = this.on ? "Current: flowing" : "Current: 0", I2 = "Current: 0";
+    text(I1, 1400, 200, 24, this.on ? C.gold : C.dim, "left", "800");
+    text(I2, 1400, 490, 24, C.dim, "left", "800");
+    legend([["e", "free electron"], ["+", "fixed copper ion"]], 340, 650);
+  }
+}
+
+// ---------------------------------------------------------------- lattice (scenes 2 and 3)
+class Lattice {
+  constructor(cx, cy, cols, rows, sp) {
+    this.sp = sp; this.atoms = []; this.bonds = []; this.free = []; this.anims = [];
+    const x0 = cx - (cols - 1) * sp / 2, y0 = cy - (rows - 1) * sp / 2;
+    this.box = [x0 - sp * 0.45, x0 + (cols - 1) * sp + sp * 0.45, y0 - sp * 0.45, y0 + (rows - 1) * sp + sp * 0.45];
+    for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++)
+      this.atoms.push({ x: x0 + c * sp, y: y0 + r * sp, type: "Si", drop: null, bonds: [] });
+    const id = (c, r) => r * cols + c;
+    for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
+      if (c < cols - 1) this.addBond(id(c, r), id(c + 1, r), true);
+      if (r < rows - 1) this.addBond(id(c, r), id(c, r + 1), false);
+    }
+    this.recombine = false; this.heat = false; this.genT = 0;
+  }
+  addBond(a, b, horiz) {
+    const A = this.atoms[a], Bq = this.atoms[b];
+    const bond = { a, b, horiz, x: (A.x + Bq.x) / 2, y: (A.y + Bq.y) / 2, e: 2, busy: false, hopT: rand(0.4, 1.0) };
+    this.bonds.push(bond); A.bonds.push(bond); Bq.bonds.push(bond);
+  }
+  neighbours(bond) {
+    const set = new Set([...this.atoms[bond.a].bonds, ...this.atoms[bond.b].bonds]); set.delete(bond); return [...set];
+  }
+  holes() { return this.bonds.filter(b => b.e === 1 && !b.busy); }
+  breakBond() {
+    const cand = this.bonds.filter(b => b.e === 2 && !b.busy);
+    if (!cand.length) return;
+    const b = cand[Math.floor(Math.random() * cand.length)];
+    b.e = 1; flash(b.x, b.y, C.gold);
+    const ang = rand(0, 6.28);
+    this.free.push({ x: b.x, y: b.y, vx: Math.cos(ang) * 80, vy: Math.sin(ang) * 80 });
+  }
+  dope(i, type) { const A = this.atoms[i]; A.drop = { t: 0, type }; }
+  update(dt) {
+    // dopant drop animation
+    for (const A of this.atoms) if (A.drop) {
+      A.drop.t += dt;
+      if (A.drop.t >= 0.9) {
+        A.type = A.drop.type; A.drop = null; flash(A.x, A.y, A.type === "P" ? C.P : C.B);
+        if (A.type === "P") { A.donor = true; this.free.push({ x: A.x + 20, y: A.y - 20, vx: 70, vy: -50 }); }
+        if (A.type === "B") { A.acceptor = true; const b = A.bonds.find(q => q.e === 2 && !q.busy); if (b) { b.e = 1; b.hopT = 1.0; } }
+      }
+    }
+    // free electrons
+    const [bx0, bx1, by0, by1] = this.box;
+    for (const p of this.free) { walk(p, dt, 75); bounce(p, bx0, bx1, by0, by1); }
+    // heat generation
+    if (this.heat) { this.genT += dt; if (this.genT > 0.8) { this.genT = 0; if (this.free.length < 7) this.breakBond(); } }
+    // hole hopping
+    for (const b of this.holes()) {
+      b.hopT -= dt; if (b.hopT > 0) continue;
+      b.hopT = rand(0.7, 1.3);
+      const nb = this.neighbours(b).filter(q => q.e === 2 && !q.busy);
+      if (!nb.length) continue;
+      const q = nb[Math.floor(Math.random() * nb.length)];
+      q.e = 1; q.busy = true; b.busy = true;
+      this.anims.push({ x: q.x, y: q.y, tx: b.x, ty: b.y, from: q, to: b });
+    }
+    this.anims = this.anims.filter(a => {
+      const done = moveTo(a, a.tx, a.ty, 120, dt);
+      if (done) { a.to.e = 2; a.to.busy = false; a.from.busy = false; a.from.hopT = rand(0.7, 1.3); }
+      return !done;
+    });
+    // recombination (scene 2)
+    if (this.recombine) {
+      for (const b of this.holes()) {
+        const k = this.free.findIndex(p => dist(p.x, p.y, b.x, b.y) < 16);
+        if (k >= 0 && this.free.length > 2) { this.free.splice(k, 1); b.e = 2; flash(b.x, b.y, C.e); }
+      }
+    }
+  }
+  bondPos(b, k) {
+    const o = k === 0 ? -7 : 7;
+    return b.horiz ? [b.x, b.y + o] : [b.x + o, b.y];
+  }
+  draw(t) {
+    ctx.strokeStyle = "rgba(159,179,200,0.35)"; ctx.lineWidth = 3;
+    for (const b of this.bonds) { const A = this.atoms[b.a], Bq = this.atoms[b.b];
+      ctx.beginPath(); ctx.moveTo(A.x, A.y); ctx.lineTo(Bq.x, Bq.y); ctx.stroke(); }
+    for (const b of this.bonds) {
+      const j = Math.sin(t * 6 + b.x * 0.05) * 1.2;
+      const p0 = this.bondPos(b, 0);
+      electron(p0[0] + j, p0[1] - j, 5.5);
+      const p1 = this.bondPos(b, 1);
+      if (b.e === 2) electron(p1[0] - j, p1[1] + j, 5.5); else hole(p1[0], p1[1], 7);
+    }
+    for (const A of this.atoms) {
+      let col = A.type === "P" ? C.P : A.type === "B" ? C.B : C.si;
+      ctx.beginPath(); ctx.arc(A.x, A.y, 25, 0, 7); ctx.fillStyle = C.atom; ctx.fill();
+      ctx.strokeStyle = col; ctx.lineWidth = 3; ctx.stroke();
+      text(A.type, A.x, A.y + 1, 20, col, "center", "800");
+      if (A.donor) text("+", A.x + 22, A.y - 22, 22, C.pos, "center", "900");
+      if (A.acceptor && A.bonds.every(b => b.e === 2 && !b.busy)) text("−", A.x + 22, A.y - 22, 26, C.neg, "center", "900");
+      if (A.drop) {
+        const k = Math.min(1, A.drop.t / 0.9), y = A.y - 260 * (1 - k * k);
+        const dc = A.drop.type === "P" ? C.P : C.B;
+        ctx.beginPath(); ctx.arc(A.x, y, 25, 0, 7); ctx.fillStyle = C.atom; ctx.fill();
+        ctx.strokeStyle = dc; ctx.lineWidth = 3; ctx.stroke();
+        text(A.drop.type, A.x, y + 1, 20, dc, "center", "800");
+      }
+    }
+    for (const a of this.anims) electron(a.x, a.y, 5.5);
+    for (const p of this.free) { ctx.shadowColor = C.e; ctx.shadowBlur = 12; electron(p.x, p.y, 8); ctx.shadowBlur = 0; }
+  }
+}
+
+class Silicon {
+  constructor() { this.reset(); }
+  reset() { this.L = new Lattice(800, 400, 8, 4, 150); this.L.recombine = true; this.t = 0; }
+  step(i) { this.L.heat = i >= 1; if (i >= 1) { this.L.breakBond(); this.L.breakBond(); } }
+  update(dt) { this.t += dt; this.L.update(dt); }
+  draw() {
+    this.L.draw(this.t);
+    const nh = this.L.bonds.filter(b => b.e === 1).length;
+    text(this.L.heat ? "Heated" : "Cold", 1390, 190, 26, this.L.heat ? C.gold : C.dim, "left", "800");
+    text(`Free electrons: ${this.L.free.length}`, 1390, 230, 22, C.e);
+    text(`Holes: ${nh}`, 1390, 262, 22, C.hole);
+    legend([["e", "electron"], ["h", "hole (missing electron)"]], 330, 690);
+  }
+}
+
+class Doping {
+  constructor() { this.reset(); }
+  reset() {
+    this.N = new Lattice(420, 410, 5, 4, 112);
+    this.P = new Lattice(1180, 410, 5, 4, 112);
+    this.t = 0; this.stepI = 0;
+  }
+  step(i) {
+    const N = this.N, P = this.P;
+    if (i >= 1 && this.stepI < 1) { N.dope(6, "P"); setTimeout(() => N.dope(13, "P"), 500); }
+    if (i >= 2 && this.stepI < 2) { P.dope(6, "B"); setTimeout(() => P.dope(13, "B"), 500); }
+    this.stepI = Math.max(this.stepI, i);
+  }
+  update(dt) { this.t += dt; this.N.update(dt); this.P.update(dt); }
+  draw() {
+    this.N.draw(this.t); this.P.draw(this.t);
+    const hasN = this.N.atoms.some(a => a.type === "P"), hasP = this.P.atoms.some(a => a.type === "B");
+    text(hasN ? "N type" : "Silicon", 420, 180, 30, hasN ? C.P : C.si, "center", "800");
+    text(hasP ? "P type" : "Silicon", 1180, 180, 30, hasP ? C.B : C.si, "center", "800");
+    text(hasN ? "Phosphorus: 5 valence electrons. Majority carrier: electrons" : "", 420, 640, 20, C.dim, "center");
+    text(hasP ? "Boron: 3 valence electrons. Majority carrier: holes" : "", 1180, 640, 20, C.dim, "center");
+    ctx.strokeStyle = "#23395a"; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(800, 170); ctx.lineTo(800, 660); ctx.stroke();
+    legend([["e", "electron"], ["h", "hole"]], 640, 710);
+  }
+}
+
+// ---------------------------------------------------------------- PN junction (scenes 4, 5, 6)
+const BW = 500, TOP = 210, BOT = 490, W0 = 62;
+class Junction {
+  constructor() { this.reset(); }
+  reset() {
+    this.pOff = 120; this.nOff = 980; this.joined = false; this.joinT = -1;
+    this.w = 0; this.V = 0; this.Vt = 0; this.battery = false;
+    this.acc = []; this.don = [];
+    for (let c = 0; c < 10; c++) for (let r = 0; r < 6; r++) {
+      this.acc.push({ rx: 25 + c * 50, ry: TOP + 25 + r * 46 });
+      this.don.push({ rx: 25 + c * 50, ry: TOP + 25 + r * 46 });
+    }
+    this.holes = this.acc.map(a => ({ x: this.pOff + a.rx + rand(-15, 15), y: a.ry + rand(-15, 15), vx: 0, vy: 0, st: "free" }));
+    this.elecs = this.don.map(a => ({ x: this.nOff + a.rx + rand(-15, 15), y: a.ry + rand(-15, 15), vx: 0, vy: 0, st: "free" }));
+    this.crossAcc = 0; this.genAcc = 0; this.flip = 0;
+    const by = 700;
+    this.pathN = makePath([[814, by], [1410, by], [1410, 350], [1300, 350]]); // battery right terminal to N contact
+    this.pathP = makePath([[300, 350], [190, 350], [190, by], [786, by]]);    // P contact to battery left terminal
+    this.flowN = new WireFlow(this.pathN); this.flowP = new WireFlow(this.pathP);
+  }
+  get J() { return this.pOff + BW; }
+  formNow() {
+    this.shift(300 - this.pOff, 800 - this.nOff); this.joined = true; this.joinT = -1;
+    this.w = W0;
+    this.holes = this.holes.filter(h => h.st === "free");
+    this.elecs = this.elecs.filter(e => e.st === "free");
+    const hz = this.holes.filter(h => h.x > this.J - this.w).length;
+    const ez = this.elecs.filter(e => e.x < this.J + this.w).length;
+    this.holes = this.holes.filter(h => h.x <= this.J - this.w);
+    this.elecs = this.elecs.filter(e => e.x >= this.J + this.w);
+    for (const h of this.holes) h.x = clamp(h.x, this.pOff + 8, this.J - this.w - 6);
+    void hz; void ez;
+  }
+  shift(dp, dn) {
+    this.pOff += dp; this.nOff += dn;
+    for (const h of this.holes) h.x += dp;
+    for (const e of this.elecs) e.x += dn;
+  }
+  current() { // mA, illustrative
+    if (this.V <= 0) return 0;
+    return 20 * Math.exp((this.V - 0.75) / 0.04);
+  }
+  wTarget() {
+    if (!this.battery) return W0;
+    if (this.V >= 0) return W0 * Math.sqrt(Math.max(0.06, 1 - this.V / 0.7));
+    return W0 * Math.sqrt(1 + (-this.V) / 2);
+  }
+  update(dt) {
+    // join animation
+    if (this.joinT >= 0) {
+      this.joinT += dt; const k = Math.min(1, this.joinT / 1.4), e = k * k * (3 - 2 * k);
+      const np = 120 + (300 - 120) * e, nn = 980 + (800 - 980) * e;
+      this.shift(np - this.pOff, nn - this.nOff);
+      if (k >= 1) { this.joinT = -1; this.joined = true; }
+    }
+    // voltage slews toward target
+    const rate = Math.abs(this.Vt) > 1 || Math.abs(this.V) > 1 ? 8 : 0.6;
+    this.V += clamp(this.Vt - this.V, -rate * dt, rate * dt);
+    // depletion width
+    if (this.joined) {
+      const wt = this.wTarget(), r = this.battery ? 45 : 20;
+      this.w += clamp(wt - this.w, -r * dt, r * dt);
+    }
+    const J = this.J, w = this.joined ? this.w : 0;
+    const pMin = this.pOff + 8, pMax = this.joined ? J - w - 6 : this.pOff + BW - 8;
+    const nMin = this.joined ? J + w + 6 : this.nOff + 8, nMax = this.nOff + BW - 8;
+
+    // formation pairing (no battery)
+    if (this.joined && !this.battery) {
+      const hz = this.holes.filter(h => h.st === "free" && h.x > J - w - 4);
+      const ez = this.elecs.filter(e => e.st === "free" && e.x < J + w + 4);
+      const n = Math.min(hz.length, ez.length);
+      hz.sort((a, b) => b.x - a.x); ez.sort((a, b) => a.x - b.x);
+      for (let i = 0; i < n; i++) {
+        const h = hz[i], e = ez[i];
+        h.st = e.st = "pair"; h.mate = e; e.mate = h;
+        h.mx = e.mx = J + rand(-10, 10); h.my = e.my = (h.y + e.y) / 2;
+      }
+    }
+    // forward bias: carriers cross the junction
+    if (this.battery && this.V > 0) {
+      this.crossAcc += Math.min(30, this.current() * 1.2) * dt;
+      while (this.crossAcc >= 1) {
+        this.crossAcc -= 1; this.flip ^= 1;
+        if (this.flip) {
+          const e = this.elecs.filter(q => q.st === "free").sort((a, b) => a.x - b.x)[0];
+          if (e) { e.st = "cross"; e.tx = J - w - rand(30, 220); e.ty = clamp(e.y + rand(-40, 40), TOP + 10, BOT - 10); }
+        } else {
+          const h = this.holes.filter(q => q.st === "free").sort((a, b) => b.x - a.x)[0];
+          if (h) { h.st = "cross"; h.tx = J + w + rand(30, 220); h.ty = clamp(h.y + rand(-40, 40), TOP + 10, BOT - 10); }
+        }
+      }
+    }
+    // reverse bias: rare thermal pair in the depletion region
+    if (this.battery && this.V < -0.3) {
+      this.genAcc += 0.22 * dt;
+      if (this.genAcc >= 1) {
+        this.genAcc = 0; const x = J + rand(-w * 0.6, w * 0.6), y = rand(TOP + 20, BOT - 20);
+        flash(x, y, C.gold);
+        this.elecs.push({ x, y, vx: 0, vy: 0, st: "drift", tx: J + w + 12, ty: y });
+        this.holes.push({ x, y, vx: 0, vy: 0, st: "drift", tx: J - w - 12, ty: y });
+      }
+    }
+    // move carriers
+    const step = (q, isHole) => {
+      if (q.st === "free") {
+        walk(q, dt, 55);
+        if (isHole) bounce(q, pMin, Math.max(pMin, pMax), TOP + 8, BOT - 8);
+        else bounce(q, Math.min(nMin, nMax), nMax, TOP + 8, BOT - 8);
+      } else if (q.st === "pair") {
+        q.arr = moveTo(q, q.mx, q.my, 130, dt);
+      } else if (q.st === "cross") {
+        if (moveTo(q, q.tx, q.ty, 170, dt)) {
+          const pool = isHole ? this.elecs : this.holes;
+          let best = null, bd = 1e9;
+          for (const o of pool) if (o.st === "free") { const d = dist(o.x, o.y, q.x, q.y); if (d < bd) { bd = d; best = o; } }
+          if (best) { q.st = best.st = "pair"; q.mate = best; best.mate = q; q.mx = best.mx = (q.x + best.x) / 2; q.my = best.my = (q.y + best.y) / 2; }
+          else q.st = "free";
+        }
+      } else if (q.st === "drift") {
+        if (moveTo(q, q.tx, q.ty, 120, dt)) q.st = "free";
+      } else if (q.st === "exit") {
+        if (moveTo(q, q.tx, q.ty, 160, dt)) q.gone = true;
+      }
+    };
+    for (const h of this.holes) step(h, true);
+    for (const e of this.elecs) step(e, false);
+    // recombination of arrived pairs
+    for (const h of this.holes) if (h.st === "pair" && h.arr && h.mate && h.mate.arr) {
+      h.gone = true; h.mate.gone = true; flash(h.mx, h.my);
+    }
+    this.holes = this.holes.filter(q => !q.gone);
+    this.elecs = this.elecs.filter(q => !q.gone);
+    // contacts keep each side neutral when a battery is connected
+    if (this.battery && this.joined) {
+      const wantH = this.acc.filter(a => this.pOff + a.rx < J - w).length;
+      const wantE = this.don.filter(a => this.nOff + a.rx > J + w).length;
+      const haveH = this.holes.filter(q => q.st !== "exit").length;
+      const haveE = this.elecs.filter(q => q.st !== "exit").length;
+      if (haveH < wantH) this.holes.push({ x: this.pOff + 6, y: rand(TOP + 20, BOT - 20), vx: 30, vy: 0, st: "free" });
+      if (haveH > wantH + 1) { const h = this.holes.filter(q => q.st === "free").sort((a, b) => a.x - b.x)[0];
+        if (h) { h.st = "exit"; h.tx = this.pOff - 4; h.ty = h.y; } }
+      if (haveE < wantE) this.elecs.push({ x: this.nOff + BW - 6, y: rand(TOP + 20, BOT - 20), vx: -30, vy: 0, st: "free" });
+      if (haveE > wantE + 1) { const e = this.elecs.filter(q => q.st === "free").sort((a, b) => b.x - a.x)[0];
+        if (e) { e.st = "exit"; e.tx = this.nOff + BW + 4; e.ty = e.y; } }
+    }
+    // wire flow
+    const I = this.current();
+    const sp = this.V > 0 ? Math.min(220, I * 8) : (this.V < -0.3 ? -2 : 0);
+    this.flowN.update(dt, sp); this.flowP.update(dt, sp);
+  }
+  draw() {
+    const J = this.J, w = this.joined ? this.w : 0;
+    if (this.battery) {
+      line(this.pathN.pts); line(this.pathP.pts);
+      this.flowN.draw(); this.flowP.draw();
+      const fwd = this.mode !== "rev";
+      battery(800, 700, fwd, `${Math.abs(this.V).toFixed(this.V > -1 && this.V < 1 ? 2 : 1)} V`);
+      // ammeter
+      ctx.beginPath(); ctx.arc(1410, 560, 30, 0, 7); ctx.fillStyle = "#0e1726"; ctx.fill();
+      ctx.strokeStyle = C.text; ctx.lineWidth = 3; ctx.stroke(); text("A", 1410, 561, 26, C.text, "center", "800");
+      const I = this.current();
+      const s = this.V > 0 ? (I < 0.01 ? "0.00 mA" : I < 100 ? `${I.toFixed(2)} mA` : "over 100 mA") : (this.V < -0.3 ? "almost 0 (leakage)" : "0 mA");
+      text("Current", 1452, 545, 20, C.dim);
+      text(s, 1452, 575, 24, this.V > 0 && I > 1 ? C.gold : C.text, "left", "800");
+    }
+    // blocks
+    ctx.fillStyle = C.pFill; ctx.fillRect(this.pOff, TOP, BW, BOT - TOP);
+    ctx.fillStyle = C.nFill; ctx.fillRect(this.nOff, TOP, BW, BOT - TOP);
+    ctx.strokeStyle = C.hole; ctx.lineWidth = 3; ctx.strokeRect(this.pOff, TOP, BW, BOT - TOP);
+    ctx.strokeStyle = C.e; ctx.strokeRect(this.nOff, TOP, BW, BOT - TOP);
+    text("P type", this.pOff + 14, TOP - 26, 28, C.hole, "left", "800");
+    text("N type", this.nOff + BW - 14, TOP - 26, 28, C.e, "right", "800");
+    // depletion region
+    if (this.joined && w > 2) {
+      ctx.fillStyle = "rgba(14,23,38,0.75)"; ctx.fillRect(J - w, TOP, 2 * w, BOT - TOP);
+      ctx.setLineDash([8, 6]); ctx.strokeStyle = C.gold; ctx.lineWidth = 2;
+      ctx.strokeRect(J - w, TOP, 2 * w, BOT - TOP); ctx.setLineDash([]);
+      text("Depletion region", J, TOP - 26, 24, C.gold, "center", "800");
+    }
+    // ions
+    for (const a of this.acc) { const x = this.pOff + a.rx; ion(x, a.ry, -1, this.joined && x > J - w); }
+    for (const a of this.don) { const x = this.nOff + a.rx; ion(x, a.ry, 1, this.joined && x < J + w); }
+    // carriers
+    for (const h of this.holes) hole(h.x, h.y);
+    for (const e of this.elecs) electron(e.x, e.y);
+    // barrier
+    if (this.joined && w > 2) {
+      const barrier = this.battery ? Math.max(0.05, 0.7 - this.V) : 0.7;
+      text(`Barrier: ${barrier.toFixed(barrier >= 1 ? 1 : 2)} V`, J, BOT + 30, 24, C.gold, "center", "800");
+    }
+    legend([["h", "hole"], ["e", "free electron"], ["-", "fixed − ion"], ["+", "fixed + ion"]], 210, 790);
+  }
+}
+
+// ---------------------------------------------------------------- scenes
+const junction = new Junction();
+const scenes = [
+  { title: "1. Conductor and Insulator", obj: new Conductor(),
+    caps: ["Copper has free electrons moving at random. The insulator's electrons stay in their atoms.",
+           "Switch on: free electrons drift from − to +. Current flows in copper. The insulator has nothing free to move."] },
+  { title: "2. Pure Silicon", obj: new Silicon(),
+    caps: ["Each silicon atom shares its 4 valence electrons with 4 neighbours. All are locked in bonds.",
+           "Heat breaks a few bonds: a free electron and a hole. Only a few, so pure silicon conducts poorly."] },
+  { title: "3. Doping: N Type and P Type", obj: new Doping(),
+    caps: ["Pure silicon: no free carriers.",
+           "Phosphorus has 5 valence electrons. 4 make bonds, the 5th is free. Silicon becomes N type.",
+           "Boron has 3 valence electrons. One bond is missing an electron: a hole. Silicon becomes P type."] },
+  { title: "4. The PN Junction", obj: junction, mode: "form",
+    caps: ["P type has holes, N type has free electrons. Each block is neutral.",
+           "Electrons cross and fill holes near the junction. Fixed ions are left behind: the depletion region."] },
+  { title: "5. Forward Bias", obj: junction, mode: "fwd",
+    caps: ["Forward bias: + to P, − to N.",
+           "Below 0.7 V the depletion region shrinks, but almost no current flows.",
+           "Above 0.7 V the barrier collapses. Electrons and holes cross and meet. Current flows."] },
+  { title: "6. Reverse Bias", obj: junction, mode: "rev",
+    caps: ["Reverse bias: + to N, − to P.",
+           "Carriers are pulled away from the junction. The depletion region grows.",
+           "Wide barrier: no current. Only a tiny leakage."] },
+];
+const fwdSteps = [0, 0.4, 0.75], revSteps = [0, -5, -10];
+let si = 0, st = 0, paused = false, clock = 0;
+
+function enter(i, keepJunction) {
+  si = i; st = 0;
+  const S = scenes[si];
+  if (S.obj !== junction) S.obj.reset();
+  if (S.mode === "form") { junction.reset(); }
+  if (S.mode === "fwd" || S.mode === "rev") {
+    if (!keepJunction) junction.reset();
+    if (!junction.joined) junction.formNow();
+    junction.battery = true; junction.mode = S.mode;
+    junction.Vt = 0;
+  }
+  applyStep();
+  buildControls();
+}
+function applyStep() {
+  const S = scenes[si];
+  if (S.mode === "form") { if (st >= 1 && !junction.joined && junction.joinT < 0) junction.joinT = 0; }
+  else if (S.mode === "fwd") junction.Vt = fwdSteps[st];
+  else if (S.mode === "rev") junction.Vt = revSteps[st];
+  else S.obj.step(st);
+  syncControls();
+}
+function next() {
+  const S = scenes[si];
+  if (st < S.caps.length - 1) { st++; applyStep(); }
+  else if (si < scenes.length - 1) enter(si + 1, true);
+}
+function back() {
+  if (st > 0) { enter(si, true); }
+  else if (si > 0) enter(si - 1, true);
+}
+
+// ---------------------------------------------------------------- controls
+const ctrl = document.getElementById("controls");
+const dots = document.getElementById("dots");
+scenes.forEach((s, i) => { const b = document.createElement("button"); b.textContent = i + 1;
+  b.onclick = () => enter(i, true); dots.appendChild(b); });
+let slider = null, valLabel = null;
+function btn(label, fn) { const b = document.createElement("button"); b.textContent = label; b.onclick = () => { fn(); b.blur(); }; ctrl.appendChild(b); return b; }
+function buildControls() {
+  ctrl.innerHTML = ""; slider = null;
+  const S = scenes[si];
+  [...dots.children].forEach((b, i) => b.classList.toggle("on", i === si));
+  if (si === 0) btn("Switch on / off", () => { st = st ? 0 : 1; applyStep(); });
+  if (si === 1) btn("Heat on / off", () => { st = st ? 0 : 1; applyStep(); });
+  if (si === 2) { btn("Add phosphorus", () => { st = Math.max(st, 1); S.obj.step(1); }); btn("Add boron", () => { st = 2; S.obj.step(2); }); }
+  if (si === 3) btn("Join P and N", () => { st = 1; applyStep(); });
+  if (S.mode === "fwd" || S.mode === "rev") {
+    const lab = document.createElement("span"); lab.textContent = S.mode === "fwd" ? "Forward voltage" : "Reverse voltage"; lab.className = "val"; lab.style.fontSize = "18px"; lab.style.minWidth = "auto";
+    ctrl.appendChild(lab);
+    slider = document.createElement("input"); slider.type = "range";
+    slider.min = 0; slider.max = S.mode === "fwd" ? 0.8 : 10; slider.step = S.mode === "fwd" ? 0.01 : 0.1;
+    slider.oninput = () => { const v = parseFloat(slider.value); junction.Vt = S.mode === "fwd" ? v : -v; syncControls(true); };
+    ctrl.appendChild(slider);
+    valLabel = document.createElement("span"); valLabel.className = "val"; ctrl.appendChild(valLabel);
+    btn("Flip polarity", () => enter(S.mode === "fwd" ? 5 : 4, true));
+  }
+  btn("Reset", () => enter(si, false));
+  syncControls();
+}
+function syncControls(fromSlider) {
+  if (!slider) return;
+  if (!fromSlider) slider.value = Math.abs(junction.Vt);
+  valLabel.textContent = `${parseFloat(slider.value).toFixed(scenes[si].mode === "fwd" ? 2 : 1)} V`;
+}
+document.getElementById("next").onclick = e => { next(); e.target.blur(); };
+document.getElementById("back").onclick = e => { back(); e.target.blur(); };
+window.addEventListener("keydown", e => {
+  const k = e.key;
+  if (k === "ArrowRight" || k === "PageDown" || k === "Enter" || k === " ") { e.preventDefault(); next(); }
+  else if (k === "ArrowLeft" || k === "PageUp" || k === "Backspace") { e.preventDefault(); back(); }
+  else if (k === "p" || k === "P") paused = !paused;
+  else if (k === "r" || k === "R") enter(si, false);
+  else if (k === "f" || k === "F") { if (!document.fullscreenElement) document.documentElement.requestFullscreen().catch(() => {}); else document.exitFullscreen(); }
+  else if (/^[1-6]$/.test(k)) enter(parseInt(k) - 1, true);
+});
+
+// ---------------------------------------------------------------- loop
+let last = performance.now();
+function frame(now) {
+  let dt = Math.min(0.05, (now - last) / 1000); last = now;
+  if (paused) dt = 0;
+  clock += dt;
+  const S = scenes[si];
+  S.obj.update(dt);
+  ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.fillStyle = "#0e1726"; ctx.fillRect(0, 0, cv.width, cv.height); ctx.restore();
+  text(S.title, 40, 46, 38, C.text, "left", "800");
+  text(S.caps[st], 40, 98, 25, C.gold, "left", "600");
+  // step dots
+  for (let i = 0; i < S.caps.length; i++) { ctx.beginPath(); ctx.arc(1540 - (S.caps.length - 1 - i) * 22, 46, 7, 0, 7);
+    ctx.fillStyle = i <= st ? C.gold : "#2c4568"; ctx.fill(); }
+  S.obj.draw();
+  drawFlashes(dt);
+  if (paused) text("PAUSED", 1560, 98, 22, C.hole, "right", "800");
+  requestAnimationFrame(frame);
+}
+resize();
+enter(0, false);
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

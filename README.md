@@ -1,0 +1,20 @@
+# Electronics Animations
+
+Interactive browser animations for teaching basic electronics. Single HTML files, no install, work offline.
+
+Live: https://isuru-rana.github.io/electronics-animations/
+
+| File | What it shows |
+|---|---|
+| `semiconductor-sim.html` | Conductor vs insulator, silicon, doping, PN junction, forward and reverse bias (6 scenes) |
+| `diode-meter-sim.html` | Diode knee voltage circuit; how a voltmeter reads the difference between red and COM |
+
+## Controls
+
+**Semiconductor sim:** Right / Space: next scene. Left: back. 1 to 6: jump. P: pause. F: fullscreen. R: reset.
+
+**Diode meter sim:** Left / Right: pot. R: record point. E: electrons. C: voltage colours. Space: pause. F: fullscreen. Drag any probe tip to a node dot.
+
+## Offline use
+
+Download the repo (Code > Download ZIP) and open any `.html` file in a browser.
