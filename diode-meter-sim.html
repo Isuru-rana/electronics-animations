@@ -29,16 +29,15 @@
   <div id="stage"><canvas id="c"></canvas></div>
   <div id="bar">
     <label for="pot">Pot</label>
-    <input id="pot" type="range" min="0" max="1000" value="300">
+    <input id="pot" type="range" min="0" max="1000" value="40">
     <button id="rec">Record point (R)</button>
     <button id="clr">Clear points</button>
     <button id="curve">Show curve</button>
     <button id="swap">Swap V<sub>R</sub> probes</button>
-    <button id="ele" class="on">Electrons (E)</button>
     <button id="col" class="on">Voltage colours (C)</button>
     <button id="rst">Reset</button>
     <span class="sp"></span>
-    <span class="keys">Left / Right: pot &nbsp; Space: pause &nbsp; F: fullscreen &nbsp; Drag a probe tip to any dot</span>
+    <span class="keys">Left / Right: pot &nbsp; F: fullscreen &nbsp; Drag a probe tip to any dot</span>
   </div>
 </div>
 <script>
@@ -93,7 +92,7 @@ const meters = [
 ];
 
 // ---------- state ----------
-let state = solve(0.3), points = [], showCurve = false, showEle = true, showCol = true, paused = false;
+let state = solve(0.04), points = [], showCurve = false, showCol = true, paused = false;
 let drag = null, mouse = { x: 0, y: 0 };
 
 // ---------- colour by potential ----------
@@ -198,41 +197,37 @@ function drawCircuit(s) {
   }
 }
 
-// ---------- electrons ----------
-// paths in direction of electron travel (from battery minus, back to battery plus)
-function paths(s) {
-  const yw = wiperY(s.x);
-  return [
-    { i: s.iTot, pts: [[BX, 560], [BX, GY], [PX, GY]] },
-    { i: s.iD,   pts: [[PX, GY], [DX, GY], [DX, RY], [AX, RY], [AX, yw], [PX, yw]] },
-    { i: s.iBot, pts: [[PX, GY], [PX, yw]] },
-    { i: s.iTot, pts: [[PX, yw], [PX, TOPY], [BX, TOPY], [BX, 200]] },
-  ];
+// ---------- voltage tags on the circuit ----------
+function tag(x, y, v, dx, dy) {
+  const t = v.toFixed(2) + " V", w = 74, h = 28, X = x + dx, Y = y + dy;
+  ctx.strokeStyle = "rgba(255,255,255,0.35)"; ctx.lineWidth = 1.5; ctx.setLineDash([4, 4]);
+  ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(X, Y); ctx.stroke(); ctx.setLineDash([]);
+  ctx.fillStyle = vcol(v); roundRect(X - w / 2, Y - h / 2, w, h, 8); ctx.fill();
+  ctx.fillStyle = "#0b0f18"; ctx.font = "bold 16px Segoe UI, Arial"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  ctx.fillText(t, X, Y + 1);
 }
-const phase = [0, 0, 0, 0];
-function polyLen(p) { let L = 0; for (let k = 1; k < p.length; k++) L += Math.hypot(p[k][0] - p[k - 1][0], p[k][1] - p[k - 1][1]); return L; }
-function pointAt(p, d) {
-  for (let k = 1; k < p.length; k++) {
-    const l = Math.hypot(p[k][0] - p[k - 1][0], p[k][1] - p[k - 1][1]);
-    if (d <= l) { const t = d / l; return [p[k - 1][0] + (p[k][0] - p[k - 1][0]) * t, p[k - 1][1] + (p[k][1] - p[k - 1][1]) * t]; }
-    d -= l;
+function drawTags(s) {
+  tag(NODES.P.x, NODES.P.y, VS, 0, -30);
+  tag(NODES.A.x, NODES.A.y, s.vA, 46, -50);
+  tag(NODES.B.x, NODES.B.y, s.vB, -46, -50);
+  tag(NODES.G.x, NODES.G.y, 0, 64, 40);
+}
+// message about the resistor: same voltage both sides gives 0 V
+function drawResistorNote(s) {
+  const vr = s.vA - s.vB, same = Math.abs(vr) < 0.005;
+  const x = 190, y = 62;
+  ctx.fillStyle = same ? "rgba(255,204,51,0.14)" : "rgba(79,209,197,0.10)";
+  roundRect(x - 165, y - 42, 330, 84, 10); ctx.fill();
+  ctx.strokeStyle = same ? "#ffcc33" : "#344262"; ctx.lineWidth = 2; ctx.stroke();
+  if (same) {
+    text("A and B are at the SAME voltage", x, y - 20, 17, "#ffcc33", "center", "bold");
+    text(s.vA.toFixed(2) + " V  −  " + s.vB.toFixed(2) + " V  =  0.00 V", x, y + 4, 17, "#e8edf7");
+    text("no difference, so the meter reads 0", x, y + 27, 15, "#8c97ad");
+  } else {
+    text("A is higher than B", x, y - 20, 17, "#4fd1c5", "center", "bold");
+    text(s.vA.toFixed(2) + " V  −  " + s.vB.toFixed(2) + " V  =  " + vr.toFixed(2) + " V", x, y + 4, 17, "#e8edf7");
+    text("this difference is the reading", x, y + 27, 15, "#8c97ad");
   }
-  return p[p.length - 1];
-}
-const speed = i => 46 * Math.sqrt(Math.max(0, i) * 1000);   // px/s, i in A
-function drawElectrons(s, dt) {
-  if (!showEle) return;
-  const SP = 26;
-  paths(s).forEach((p, k) => {
-    if (!paused) phase[k] = (phase[k] + speed(p.i) * dt) % SP;
-    if (p.i < 2e-6) return;
-    const L = polyLen(p.pts);
-    for (let d = phase[k]; d < L; d += SP) {
-      const [x, y] = pointAt(p.pts, d);
-      ctx.fillStyle = "#7fd3ff"; ctx.beginPath(); ctx.arc(x, y, 6, 0, 7); ctx.fill();
-      ctx.fillStyle = "#0b2a44"; ctx.fillRect(x - 3.5, y - 1, 7, 2);
-    }
-  });
 }
 
 // ---------- meters ----------
@@ -355,15 +350,15 @@ function frame(t) {
   const dt = Math.min(0.05, (t - last) / 1000); last = t;
   ctx.fillStyle = "#0f1420"; ctx.fillRect(0, 0, W, H);
   drawCircuit(state);
-  drawElectrons(state, dt);
   meters.forEach(m => { probeWire(m, "com"); probeWire(m, "red"); });
   meters.forEach(m => drawMeter(m, state));
+  drawTags(state);
+  drawResistorNote(state);
   ctx.strokeStyle = "#263049"; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(905, 40); ctx.lineTo(905, 720); ctx.stroke();
   drawLadder(state);
   drawGraph(state);
-  text("Electrons flow from − to +. A meter only compares two points: reading = V(red) − V(COM)",
+  text("A meter only compares two points: reading = V(red) − V(COM)",
        450, 735, 17, "#8c97ad");
-  if (paused) text("PAUSED", 120, 40, 20, "#ff6b6b", "center", "bold");
   requestAnimationFrame(frame);
 }
 
@@ -394,17 +389,14 @@ $("rec").onclick = record;
 $("clr").onclick = () => { points = []; };
 $("curve").onclick = () => { showCurve = !showCurve; toggle($("curve"), showCurve); };
 $("swap").onclick = () => { const m = meters[0]; [m.red, m.com] = [m.com, m.red]; };
-$("ele").onclick = () => { showEle = !showEle; toggle($("ele"), showEle); };
 $("col").onclick = () => { showCol = !showCol; toggle($("col"), showCol); };
 $("rst").onclick = () => { meters[0].red = "A"; meters[0].com = "B"; meters[1].red = "B"; meters[1].com = "G";
-  points = []; showCurve = false; toggle($("curve"), false); setPot(300); };
+  points = []; showCurve = false; toggle($("curve"), false); setPot(40); };
 window.addEventListener("keydown", e => {
   if (e.key === "ArrowRight") setPot(Math.min(1000, +pot.value + 10));
   else if (e.key === "ArrowLeft") setPot(Math.max(0, +pot.value - 10));
   else if (e.key === "r" || e.key === "R") record();
-  else if (e.key === "e" || e.key === "E") $("ele").click();
   else if (e.key === "c" || e.key === "C") $("col").click();
-  else if (e.key === " ") { paused = !paused; e.preventDefault(); }
   else if (e.key === "f" || e.key === "F") { document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen(); }
   else return;
   if (document.activeElement && document.activeElement.tagName === "BUTTON") document.activeElement.blur();

@@ -13,7 +13,7 @@ Live: https://isuru-rana.github.io/electronics-animations/
 
 **Semiconductor sim:** Right / Space: next scene. Left: back. 1 to 6: jump. P: pause. F: fullscreen. R: reset.
 
-**Diode meter sim:** Left / Right: pot. R: record point. E: electrons. C: voltage colours. Space: pause. F: fullscreen. Drag any probe tip to a node dot.
+**Diode meter sim:** Left / Right: pot. R: record point. C: voltage colours. F: fullscreen. Drag any probe tip to a node dot.
 
 ## Offline use
 
