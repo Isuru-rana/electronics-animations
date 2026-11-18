@@ -59,10 +59,11 @@ let vin = 9, load = 0, fault = false, burnt = false, temp = 25, smoke = [];
 
 const softplus = x => (x > 30 ? x : Math.log1p(Math.exp(x)));
 // current down through the Zener (cathode on top) for a voltage V across it
+const iz0 = V => (0.1 / 2) * softplus((V - 5.12) / 0.1);           // healthy Zener, reverse: knee ~5.1 V, Rz ~2 ohm
 function iz(V, rev) {
   if (burnt) return V / 0.5;                                      // failed short
   if (rev) return (0.03 / 1.5) * softplus((V - 0.62) / 0.03);   // backwards: forward diode, ~0.7 V
-  return (0.1 / 8) * softplus((V - 4.97) / 0.1);                // breakdown knee ~5.1 V, Rz ~8 ohm
+  return iz0(V);
 }
 function solve(vi, li, rev) {
   if (vi <= 0) return { vo: 0, is: 0, iz: 0, il: 0 };
@@ -284,55 +285,75 @@ function drawPanel(r) {
   text("mA", bx + bw, by - 14, 13, MUTED, "right");
 }
 
-// ---------- graph ----------
-const GX0 = 810, GX1 = 1345, GY0 = 90, GY1 = 400, VMAX = 7;
-const gx = v => GX0 + (v / 12) * (GX1 - GX0), gy = v => GY1 - (v / VMAX) * (GY1 - GY0);
-const curves = {};
-function curve(li, rev) {
-  const k = li + (rev ? "r" : "n") + RS + (burnt ? "b" : "");
-  if (!curves[k]) { const a = []; for (let v = 0; v <= 12.0001; v += 0.05) a.push([v, solve(v, li, rev).vo]); curves[k] = a; }
-  return curves[k];
-}
+// ---------- graph: Zener characteristic, reverse bias part only ----------
+// Origin top right. Reverse voltage grows to the left, reverse current grows downward.
+const GX0 = 830, GX1 = 1330, GY0 = 96, GY1 = 410, VRMAX = 7;
+const gx = v => GX1 - (v / VRMAX) * (GX1 - GX0);
+let IMAX = 0.03;
+const gy = i => GY0 + (i / IMAX) * (GY1 - GY0);
 let recs = [];
 function drawGraph(r) {
+  IMAX = RS < 330 ? 0.3 : 0.03;
+  const step = RS < 330 ? 0.05 : 0.005;
   box(740, 24, 630, 440);
-  sub("V", "out", 760, 50, 20, INK, "left"); text("against", 815, 50, 18, MUTED, "left");
-  sub("V", "in", 885, 50, 20, INK, "left");
+  text("Zener characteristic (reverse bias)", 760, 50, 20, INK, "left", "bold");
+  // grid
   ctx.strokeStyle = GRID; ctx.lineWidth = 1;
-  for (let v = 0; v <= 12; v++) { ctx.beginPath(); ctx.moveTo(gx(v), GY0); ctx.lineTo(gx(v), GY1); ctx.stroke(); if (v % 2 === 0) text(v + "", gx(v), GY1 + 16, 13, MUTED); }
-  for (let v = 0; v <= VMAX; v++) { ctx.beginPath(); ctx.moveTo(GX0, gy(v)); ctx.lineTo(GX1, gy(v)); ctx.stroke(); text(v + "", GX0 - 12, gy(v), 13, MUTED, "right"); }
-  sub("V", "in", (GX0 + GX1) / 2, GY1 + 40, 15, MUTED, "center", "normal"); text("(V)", (GX0 + GX1) / 2 + 30, GY1 + 40, 14, MUTED, "left");
-  ctx.save(); ctx.translate(772, (GY0 + GY1) / 2); ctx.rotate(-Math.PI / 2); text("V out (V)", 0, 0, 14, MUTED); ctx.restore();
-  // V_Z line
+  for (let v = 0; v <= VRMAX; v++) { ctx.beginPath(); ctx.moveTo(gx(v), GY0); ctx.lineTo(gx(v), GY1); ctx.stroke(); }
+  for (let i = 0; i <= IMAX + 1e-9; i += step) { ctx.beginPath(); ctx.moveTo(GX0, gy(i)); ctx.lineTo(GX1, gy(i)); ctx.stroke(); }
+  // axes through the origin (top right)
+  poly([[GX0 - 10, GY0], [GX1 + 14, GY0]], INK, 2.5); poly([[GX1, GY0 - 14], [GX1, GY1 + 10]], INK, 2.5);
+  for (let v = 1; v <= VRMAX; v++) text("−" + v, gx(v), GY0 - 14, 13, MUTED);
+  text("0", GX1 + 12, GY0 - 14, 13, MUTED);
+  for (let i = step; i <= IMAX + 1e-9; i += step) text("−" + Math.round(i * 1000), GX1 + 10, gy(i), 13, MUTED, "left");
+  text("−V (V)", GX0 - 8, GY0 + 16, 14, MUTED, "left");
+  text("−I (mA)", GX1 + 10, GY1 + 26, 14, MUTED, "left");
+  // V_Z line and knee note
   ctx.setLineDash([7, 6]); ctx.strokeStyle = CZ; ctx.lineWidth = 2;
-  ctx.beginPath(); ctx.moveTo(GX0, gy(VZ)); ctx.lineTo(GX1, gy(VZ)); ctx.stroke();
-  // dropout marker
-  if (!fault) {
-    const d = dropout(load);
-    ctx.strokeStyle = LOADS[load].col; ctx.beginPath(); ctx.moveTo(gx(d), GY0); ctx.lineTo(gx(d), GY1); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(gx(VZ), GY0); ctx.lineTo(gx(VZ), GY1); ctx.stroke();
+  // 1 W limit: I_ZM = P / V_Z
+  const izm = PMAX / VZ;
+  if (izm < IMAX) {
+    ctx.strokeStyle = BAD; ctx.beginPath(); ctx.moveTo(GX0, gy(izm)); ctx.lineTo(GX1, gy(izm)); ctx.stroke();
   }
   ctx.setLineDash([]);
-  sub("V", "Z", GX1 - 4, gy(VZ) - 14, 15, CZ, "right"); text("5.1 V", GX1 - 4, gy(VZ) + 15, 13, CZ, "right");
-  if (!fault) text("regulates above " + f1(dropout(load)) + " V", gx(dropout(load)) + 6, GY0 + 12, 14, LOADS[load].col, "left", "bold");
-  // curves: other loads faint, active bold
-  for (let li = 0; li < 3; li++) {
-    if (li === load) continue;
-    ctx.globalAlpha = 0.25; poly(curve(li, false).map(p => [gx(p[0]), gy(p[1])]), LOADS[li].col, 2.5); ctx.globalAlpha = 1;
+  ctx.font = "bold 14px Segoe UI, Arial"; const wz = ctx.measureText("5.1 V").width;
+  ctx.fillStyle = "#fff"; ctx.fillRect(gx(VZ) - 40 - wz, gy(IMAX * 0.55) - 12, wz + 34, 26);
+  sub("V", "Z", gx(VZ) - 14 - wz, gy(IMAX * 0.55), 16, CZ, "right"); text("5.1 V", gx(VZ) - 10, gy(IMAX * 0.55), 14, CZ, "right", "bold");
+  if (izm < IMAX) { ctx.fillStyle = "rgba(217,54,54,0.07)"; ctx.fillRect(GX0, gy(izm), GX1 - GX0, GY1 - gy(izm));
+    const e = sub("I", "ZM", gx(VZ) + 22, gy(izm) + 16, 15, BAD, "left");
+    text(" " + Math.round(izm * 1000) + " mA: 1 W limit, more burns it", e, gy(izm) + 16, 14, BAD, "left", "bold"); }
+  // curve
+  const pts = [];
+  for (let v = 0; v <= 5.6; v += 0.01) { const i = iz0(v); if (i > IMAX) break; pts.push([gx(v), gy(i)]); }
+  poly(pts, burnt ? OFFC : CZ, 4);
+  text("leakage: almost no current", gx(2.6), GY0 + 22, 14, MUTED, "center");
+  const ay = gy(IMAX * 0.38);
+  text("breakdown: V stays near 5.1 V", gx(VZ) + 22, ay, 14, CZ, "left", "bold");
+  text("while I changes a lot", gx(VZ) + 22, ay + 18, 14, CZ, "left");
+  if (burnt) {
+    const sp = []; for (let v = 0; v <= 7; v += 0.05) { const i = v / 0.5; if (i > IMAX) break; sp.push([gx(v), gy(i)]); }
+    poly(sp.length > 1 ? sp : [[gx(0), gy(0)], [gx(IMAX * 0.5), gy(IMAX)]], "#2a2a2a", 4);
+    text("burnt: short, no 5.1 V knee", gx(0.25), gy(IMAX * 0.25), 14, BAD, "right", "bold");
   }
-  poly(curve(load, fault).filter(p => p[0] <= vin + 1e-9).map(p => [gx(p[0]), gy(p[1])]), LOADS[load].col, 4);
   // recorded points
   for (const p of recs) {
+    if (p.iz > IMAX || p.f) continue;
     ctx.fillStyle = "#fff"; ctx.strokeStyle = LOADS[p.l].col; ctx.lineWidth = 3;
-    ctx.beginPath(); ctx.arc(gx(p.v), gy(p.o), 6, 0, 7); ctx.fill(); ctx.stroke();
+    ctx.beginPath(); ctx.arc(gx(p.o), gy(p.iz), 6, 0, 7); ctx.fill(); ctx.stroke();
   }
-  // live point
-  ctx.fillStyle = LOADS[load].col; ctx.beginPath(); ctx.arc(gx(vin), gy(r.vo), 9, 0, 7); ctx.fill();
-  // legend
-  let lx = 1000;
-  for (let li = 0; li < 3; li++) {
-    poly([[lx, 50], [lx + 26, 50]], LOADS[li].col, li === load ? 4 : 2.5);
-    text(LOADS[li].short, lx + 32, 50, 14, li === load ? INK : MUTED, "left", li === load ? "bold" : "normal");
-    lx += 110;
+  // operating point
+  if (fault) {
+    roundRect(GX0 + 40, GY0 + 110, 380, 64, 10); ctx.fillStyle = "#fde2e2"; ctx.fill();
+    text("Zener fitted backwards: it is forward biased,", GX0 + 230, GY0 + 130, 15, BAD, "center", "bold");
+    text("so it works off this chart at about 0.7 V", GX0 + 230, GY0 + 154, 15, BAD, "center", "bold");
+  } else {
+    const px = gx(r.vo), py = gy(Math.min(r.iz, IMAX));
+    ctx.setLineDash([4, 4]); ctx.strokeStyle = MUTED; ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.moveTo(px, GY0); ctx.lineTo(px, py); ctx.lineTo(GX1, py); ctx.stroke(); ctx.setLineDash([]);
+    ctx.fillStyle = burnt ? "#2a2a2a" : LOADS[load].col; ctx.beginPath(); ctx.arc(px, py, 9, 0, 7); ctx.fill();
+    const tx = Math.max(GX0 + 90, Math.min(GX1 - 110, px - 110)), ty = py + 34 > GY1 - 10 ? py - 30 : py + 34;
+    tag(f2(r.vo) + " V, " + mA(r.iz), tx, ty, burnt ? "#2a2a2a" : LOADS[load].col);
   }
 }
 
@@ -365,7 +386,7 @@ function drawTable() {
 let last = performance.now(), sweeping = false;
 function record() {
   const r = solve(vin, load, fault);
-  recs.push({ v: vin, o: r.vo, l: load });
+  recs.push({ v: vin, o: r.vo, iz: r.iz, l: load, f: fault || burnt });
   for (const c of COLS) if (Math.abs(vin - c) < 0.05) table[load][c] = r.vo;
 }
 function frame(now) {

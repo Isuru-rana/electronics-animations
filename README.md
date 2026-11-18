@@ -10,7 +10,7 @@ Live: https://isuru-rana.github.io/electronics-animations/
 | `fullwave-ct-sim.html` | Centre tap full wave rectifier: current path per half cycle, input and output graphs, open D2 fault |
 | `bridge-sim.html` | Bridge rectifier: diode pairs per half cycle, input and output graphs, open D3 fault |
 | `transistor-tap-sim.html` | NPN transistor next to a water tap: cut-off, active, saturation |
-| `zener-regulator-sim.html` | Zener regulator: V_in sweep, loads, current split, V_out vs V_in graph, worksheet table; backwards and burn-out faults |
+| `zener-regulator-sim.html` | Zener regulator: V_in sweep, loads, current split, Zener reverse characteristic with live operating point, worksheet table; backwards and burn-out faults |
 | `diode-meter-sim.html` | Diode knee voltage circuit; how a voltmeter reads the difference between red and COM |
 
 ## Controls
