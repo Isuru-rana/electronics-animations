@@ -201,18 +201,17 @@ function scope(x, y, w, h, o) {
   }
   text(vdiv + " V/div", gx + gw, gy + gh + 20, 13, MUTED, "right");
 }
-function readout(lines, x = 30, y = 548, w = 730, h = 196) {
+function readout(lines, x = 30, y = 610, w = 730, h = 130) {
   box(x, y, w, h);
   let yy = y + 30;
   for (const L of lines) {
-    if (L.pill) { roundRect(x + 14, yy - 17, w - 28, 34, 8); ctx.fillStyle = L.color + "18"; ctx.fill(); }
-    text(L.s, x + (L.pill ? 28 : 22), yy, L.size || 18, L.color || INK, "left", L.weight || "normal");
-    yy += L.gap || 38;
+    if (L.pill) { roundRect(x + 14, yy - 20, w - 28, 40, 8); ctx.fillStyle = L.color + "18"; ctx.fill(); }
+    text(L.s, x + (L.pill ? 28 : 22), yy, L.size || 22, L.color || INK, "left", L.weight || "normal");
+    yy += L.gap || 52;
   }
 }
 function header(title, subtitle) {
   text(title, 40, 36, 28, INK, "left", "bold");
-  text(subtitle, 40, 70, 16, MUTED, "left");
 }
 
 // ======================================================================
@@ -289,11 +288,8 @@ function s1Draw() {
   if (!L1.closed) {
     const want = AOL * L1.vdEff, sat = Math.abs(want) > VSAT;
     readout([
-      { s: "OPEN LOOP: no feedback", weight: "bold", color: COUT },
-      { s: "V_{out} = A_{OL} × (V_{+} − V_{−}) = 200 000 × " + (L1.vdEff * 1e6).toFixed(1) + " µV = " + want.toFixed(2) + " V" },
-      sat ? { s: "Wanted " + want.toFixed(1) + " V, but the output cannot pass the supply: SATURATED at " + (want > 0 ? "+" : "−") + "7.5 V", color: BAD, weight: "bold", pill: true }
-          : { s: "Linear only while |V_{+} − V_{−}| < 37.5 µV. A little more and it saturates.", color: GOOD, weight: "bold", pill: true },
-      { s: L1.noise ? "1 mV of noise on the input slams the output from rail to rail: useless as an amplifier." : "Turn on input noise to see why open loop is not used to amplify.", color: MUTED, size: 16 },
+      { s: "V_{out} = 200 000 × (V_{+} − V_{−})", weight: "bold", color: COUT },
+      sat ? { s: "SATURATED", color: BAD, weight: "bold", pill: true } : { s: "LINEAR", color: GOOD, weight: "bold", pill: true },
     ]);
     // transfer graph
     const gx0 = 860, gx1 = 1340, gy0 = 90, gy1 = 650;
@@ -307,8 +303,8 @@ function s1Draw() {
     text("V_{+} − V_{−} (µV)", (gx0 + gx1) / 2, gy1 + 44, 15, MUTED, "center");
     ctx.save(); ctx.translate(820, (gy0 + gy1) / 2); ctx.rotate(-Math.PI / 2); text("V_{out} (V)", 0, 0, 15, MUTED, "center"); ctx.restore();
     for (const r of [VSAT, -VSAT]) poly([[gx0, Y(r)], [gx1, Y(r)]], BAD, 1.5, [7, 6]);
-    text("+7.5 V: positive saturation", gx0 + 8, Y(VSAT) - 14, 14, BAD, "left", "bold");
-    text("−7.5 V: negative saturation", gx1 - 8, Y(-VSAT) + 16, 14, BAD, "right", "bold");
+    text("+7.5 V", gx0 + 8, Y(VSAT) - 14, 14, BAD, "left", "bold");
+    text("−7.5 V", gx1 - 8, Y(-VSAT) + 16, 14, BAD, "right", "bold");
     text("linear region", X(0), gy0 + 18, 14, GOOD, "center", "bold");
     const pts = []; for (let v = -100; v <= 100; v += 0.5) pts.push([X(v), Y(clip(AOL * v * 1e-6))]);
     poly(pts, COUT, 4);
@@ -318,12 +314,10 @@ function s1Draw() {
     const err = L1.vin - L1.vout / 2, steady = Math.abs(err) < 0.002;
     const sat = Math.abs(L1.vout) >= VSAT - 1e-6;
     readout([
-      { s: "CLOSED LOOP: part of V_{out} is fed back to V_{−} (gain = 1 + R_f ÷ R_{in} = 2)", weight: "bold", color: FB },
-      { s: "V_{out} rises while V_{+} > V_{−}, falls while V_{+} < V_{−}, and stops when V_{−} = V_{+}." },
-      sat ? { s: "Needs " + (2 * L1.vin).toFixed(1) + " V, more than 7.5 V: saturated, V_{−} can no longer reach V_{+}", color: BAD, weight: "bold", pill: true }
-          : steady ? { s: "Settled: V_{out} = 2 × V_{in} = " + L1.vout.toFixed(2) + " V", color: GOOD, weight: "bold", pill: true }
-                   : { s: "Adjusting... difference V_{+} − V_{−} = " + err.toFixed(3) + " V", color: CIN, weight: "bold", pill: true },
-      { s: "Left over difference when settled: V_{out} ÷ 200 000 = " + (Math.abs(L1.vout) / AOL * 1e6).toFixed(1) + " µV, almost zero.", color: MUTED, size: 16 },
+      { s: "Gain = 1 + R_f ÷ R_{in} = 2", weight: "bold", color: FB },
+      sat ? { s: "SATURATED", color: BAD, weight: "bold", pill: true }
+          : steady ? { s: "SETTLED:  V_{−} = V_{+}", color: GOOD, weight: "bold", pill: true }
+                   : { s: "ADJUSTING", color: CIN, weight: "bold", pill: true },
     ]);
     // time chart
     box(790, 24, 580, 720);
@@ -392,11 +386,9 @@ function s2Draw() {
   tag("V_{out} " + r.vout.toFixed(2) + " V", 690, 250, COUT);
   text("I = " + Math.abs(iin).toFixed(3) + " mA", 225, nY + 32, 15, CIN, "center", "bold");
   readout([
-    { s: "A_v = −R_f ÷ R_{in} = −" + kfmt(a.rf).replace(" kΩ", "") + " ÷ " + kfmt(a.rin).replace(" kΩ", "") + " = −" + gain.toFixed(gain < 10 ? 2 : 1), weight: "bold", color: COUT },
-    { s: "V_{in} peak " + a.amp.toFixed(2) + " V, so V_{out} peak should be " + (a.amp * gain).toFixed(2) + " V, upside down (180°)" },
-    a.amp * gain > VSAT ? { s: "CLIPPING: the output cannot pass ±7.5 V. While it is stuck, V_{−} leaves 0 V.", color: BAD, weight: "bold", pill: true }
-      : { s: "V_{−} stays at 0 V (virtual earth): all of I flows on through R_f", color: GOOD, weight: "bold", pill: true },
-    { s: "I = V_{in} ÷ R_{in}, then V_{out} = −I × R_f. Bigger R_f or smaller R_{in}: more gain.", color: MUTED, size: 16 },
+    { s: "A_v = −R_f ÷ R_{in} = −" + gain.toFixed(gain < 10 ? 2 : 1), weight: "bold", color: COUT },
+    a.amp * gain > VSAT ? { s: "CLIPPING", color: BAD, weight: "bold", pill: true }
+      : { s: "V_{−} = 0 V  (virtual earth)", color: GOOD, weight: "bold", pill: true },
   ]);
   scope(790, 24, 580, 720, { title: "Scope", vdiv: 2, rails: true, traces: [
     { f: tt => invVals(tt).vin, color: CIN, label: "V_{in}" },
@@ -439,11 +431,9 @@ function s3Draw() {
   terminal(666, A.out[1]); text("V_{out}", 680, A.out[1], 18, COUT, "left", "bold");
   tag("V_{out} " + r.vout.toFixed(2) + " V", 690, 250, COUT);
   readout([
-    { s: "A_v = 1 + R_f ÷ R_{in} = 1 + " + a.rf + " ÷ " + a.rin + " = " + r.g.toFixed(2), weight: "bold", color: COUT },
-    { s: "V_{in} peak " + a.amp.toFixed(2) + " V, so V_{out} peak should be " + (a.amp * r.g).toFixed(2) + " V, in phase" },
-    a.amp * r.g > VSAT ? { s: "CLIPPING: output stuck at the ±7.5 V limit, V_{−} can no longer follow V_{in}", color: BAD, weight: "bold", pill: true }
-      : { s: "V_{−} follows V_{in}: R_f and R_{in} divide V_{out} back down to V_{in}", color: GOOD, weight: "bold", pill: true },
-    { s: "Gain is never below 1. The input takes almost no current from the source.", color: MUTED, size: 16 },
+    { s: "A_v = 1 + R_f ÷ R_{in} = " + r.g.toFixed(2), weight: "bold", color: COUT },
+    a.amp * r.g > VSAT ? { s: "CLIPPING", color: BAD, weight: "bold", pill: true }
+      : { s: "V_{−} follows V_{in}", color: GOOD, weight: "bold", pill: true },
   ]);
   scope(790, 24, 580, 720, { title: "Scope", vdiv: 2, rails: true, traces: [
     { f: tt => nonVals(tt).vin, color: CIN, label: "V_{in}" },
@@ -471,7 +461,6 @@ function s4Draw() {
   for (let k = 0; k <= 10; k++) { const aa = (-135 + 27 * k - 90) * Math.PI / 180; poly([[KNOB.x + 36 * Math.cos(aa), KNOB.y + 36 * Math.sin(aa)], [KNOB.x + 42 * Math.cos(aa), KNOB.y + 42 * Math.sin(aa)]], MUTED, 2); }
   poly([[KNOB.x, KNOB.y], [KNOB.x + 24 * Math.sin(ang), KNOB.y - 24 * Math.cos(ang)]], FB, 5);
   text("R_f = " + g.rf.toFixed(0) + " kΩ", 600, 104, 17, FB, "right", "bold");
-  text("drag the knob", 600, 128, 14, MUTED, "right");
   // speaker
   const sx = 690, sy = A.out[1], push = r.vout / VSAT * 7;
   poly([[660, sy], [680, sy]]);
@@ -485,11 +474,9 @@ function s4Draw() {
   if (r.clipped || g.amp * gain > VSAT) text("DISTORTION", sx + 20, sy + 70, 16, BAD, "center", "bold");
   const db = 20 * Math.log10(gain);
   readout([
-    { s: "Gain = 1 + R_f ÷ R_{in} = 1 + " + g.rf.toFixed(0) + " ÷ 10 = ×" + gain.toFixed(1) + "   (" + db.toFixed(1) + " dB)", weight: "bold", color: COUT },
-    { s: "V_{in} peak " + g.amp.toFixed(2) + " V, so V_{out} peak " + (g.amp * gain).toFixed(2) + " V" },
-    g.amp * gain > VSAT ? { s: "Too much gain: the tops are cut flat and the sound distorts. Turn it down.", color: BAD, weight: "bold", pill: true }
-      : { s: "Clean: the output is a bigger copy of the input", color: GOOD, weight: "bold", pill: true },
-    { s: "Every doubling of gain adds 6 dB. Real volume pots use a log taper so the ear hears even steps.", color: MUTED, size: 16 },
+    { s: "Gain ×" + gain.toFixed(1) + "   (" + db.toFixed(1) + " dB)", weight: "bold", color: COUT },
+    g.amp * gain > VSAT ? { s: "DISTORTION", color: BAD, weight: "bold", pill: true }
+      : { s: "CLEAN", color: GOOD, weight: "bold", pill: true },
   ]);
   scope(790, 24, 580, 720, { title: "Scope", vdiv: 2, rails: true, traces: [
     { f: tt => gainVals(tt).vin, color: CIN, label: "V_{in}" },
@@ -532,7 +519,7 @@ function s5Draw() {
   header("Noise Cancelling Headphones", "A mic hears the noise, an inverting amplifier makes the opposite wave, the two add to almost nothing.");
   // noise source
   box(36, 210, 120, 120, "#eef1f6", "#c5ccd8");
-  text("Engine", 96, 250, 17, INK, "center", "bold"); text("noise", 96, 274, 17, INK, "center", "bold"); text("100 Hz hum", 96, 300, 13, MUTED, "center");
+  text("Engine", 96, 250, 17, INK, "center", "bold"); text("noise", 96, 274, 17, INK, "center", "bold"); 
   waves(150, 270, 10, 190, 1, "#7a8396");
   // ear cup (cross section) and ear
   ctx.fillStyle = "#3a4256"; roundRect(330, 120, 150, 300, 26); ctx.fill();
@@ -558,20 +545,17 @@ function s5Draw() {
   text("R_f (gain)", 332, 452, 14, FB, "right", "bold");
   poly([A.plus, [370, A.plus[1]], [370, A.plus[1] + 10]]); ground(370, A.plus[1] + 10);
   poly([A.out, [540, A.out[1]], [540, 440], [405, 440], [405, 292]]); dot(505, A.out[1]);
-  text("inverting", 430, 586, 14, MUTED, "center", "bold");
   if (N5.music) {
     poly([[nX, nY], [nX, 580]]); zigV(nX, 580, 620, CIN); poly([[nX, 620], [nX, 640], [280, 640]]);
     text("Music in", 270, 640, 15, CIN, "right", "bold");
   }
   const red = residual5(), db = 20 * Math.log10(Math.max(red, 1e-4));
   readout([
-    { s: N5.on ? "Speaker output = −G × mic" + (N5.music ? " − music" : "") + ":  G = " + N5.g.toFixed(2) + ",  delay " + N5.delay.toFixed(1) + " ms" : "Noise cancelling OFF", weight: "bold", color: COUT },
-    { s: "Noise at the ear: " + (red * 100).toFixed(0) + " % of the outside noise  (" + db.toFixed(1) + " dB)" },
-    !N5.on ? { s: "You hear all of the engine noise", color: BAD, weight: "bold", pill: true }
-      : red < 0.15 ? { s: "The anti-noise is equal and opposite: the waves cancel", color: GOOD, weight: "bold", pill: true }
-        : { s: N5.delay > 0.2 ? "Too slow: the anti-noise arrives late, so the peaks no longer line up" : "Gain not matched: the anti-noise is the wrong size", color: BAD, weight: "bold", pill: true },
-    { s: "Same idea as the summing amplifier: music is added, noise is subtracted.", color: MUTED, size: 16 },
-  ].map(L => Object.assign({ size: 16, gap: 36 }, L)), 790, 552, 580, 192);
+    { s: "Noise at the ear: " + (red * 100).toFixed(0) + " %", weight: "bold", color: COUT },
+    !N5.on ? { s: "ANC OFF", color: BAD, weight: "bold", pill: true }
+      : red < 0.15 ? { s: "CANCELLED", color: GOOD, weight: "bold", pill: true }
+        : { s: N5.delay > 0.2 ? "TOO LATE" : "GAIN WRONG", color: BAD, weight: "bold", pill: true },
+  ], 790, 600, 580, 140);
   // scopes
   scope(790, 24, 580, 170, { title: "1  Noise outside (at the mic)", vdiv: 1, traces: [{ f: noise5, color: "#7a8396" }] });
   scope(790, 200, 580, 170, { title: "2  Speaker output (anti-noise)", vdiv: 1, traces: [{ f: spk5, color: COUT }] });
@@ -605,11 +589,11 @@ function s6Draw() {
   // sensor and long cable
   box(30, 230, 100, 130, "#eef1f6", "#c5ccd8"); text("Sensor", 80, 262, 16, INK, "center", "bold"); generator(80, 312, 22, CIN);
   poly([[130, yA - 10], [380, yA - 10], [380, yA], [400, yA]], D6.single ? OFFC : WIRE); poly([[130, yB + 10], [380, yB + 10], [380, yB], [400, yB]]);
-  text("wire 1: signal + noise", 250, yB + 30, 14, MUTED, "left", "bold");
-  text("wire 2: 0 V ref + noise", 250, yA + 12, 14, MUTED, "left", "bold");
+  text("signal + noise", 250, yB + 30, 14, MUTED, "left", "bold");
+  text("noise", 250, yA + 12, 14, MUTED, "left", "bold");
   // mains cable inducing noise
   poly([[150, 130], [370, 130]], "#9a6b00", 10);
-  text("Mains cable 50 Hz", 260, 104, 15, "#9a6b00", "center", "bold");
+  text("Mains 50 Hz", 260, 108, 15, "#9a6b00", "center", "bold");
   for (const x of [165, 215]) {
     const n = Math.abs(hum6(t)) / Math.max(0.01, D6.noise) * (D6.noise > 0 ? 1 : 0);
     poly([[x, 142], [x - 10, 175], [x + 6, 175], [x - 4, yA - 18]], "#e0a000", 2.5);
@@ -618,7 +602,7 @@ function s6Draw() {
   // resistors
   zigH(400, 480, yA, D6.single ? OFFC : WIRE); poly([[480, yA], [500, yA]], D6.single ? OFFC : WIRE); poly([[500, yA], A.minus]); dot(500, yA);
   zigH(400, 480, yB); poly([[480, yB], A.plus]); dot(500, yB);
-  text(D6.single ? "R_1 not connected" : "R_1 10 kΩ", 440, yA - 26, 15, D6.single ? MUTED : INK, "center", "bold"); text("R_3 10 kΩ", 440, yB + 30, 15, INK, "center", "bold");
+  text(D6.single ? "R_1 off" : "R_1 10 kΩ", 440, yA - 26, 15, D6.single ? MUTED : INK, "center", "bold"); text("R_3 10 kΩ", 440, yB + 30, 15, INK, "center", "bold");
   poly([[500, yA], [500, 190], [540, 190]]); zigH(540, 620, 190); poly([[620, 190], [680, 190], [680, A.out[1]]]); dot(680, A.out[1]);
   text("R_f 10 kΩ", 580, 162, 15, INK, "center", "bold");
   poly([[500, yB], [500, 380]]); zigV(500, 380, 450, D6.mis ? BAD : WIRE); poly([[500, 450], [500, 466]]); ground(500, 466);
@@ -628,12 +612,10 @@ function s6Draw() {
   const r4 = 10 * (1 + D6.mis / 100), cm = D6.single ? 1 : Math.abs(2 * r4 / (10 + r4) - 1);
   const cmrr = cm > 1e-6 ? 20 * Math.log10(1 / cm) : Infinity;
   readout([
-    { s: D6.single ? "One wire only: V_{out} = wire 1 = signal + noise" : "V_{out} = (R_f ÷ R_1) × (V_{+} − V_{−}) = wire 1 − wire 2 = signal", weight: "bold", color: COUT },
-    { s: "Noise left at the output: " + (cm * 100).toFixed(1) + " %" + (D6.single ? "" : "   (common mode rejection " + (cmrr === Infinity ? "perfect" : cmrr.toFixed(0) + " dB") + ")") },
-    D6.single ? { s: "No cancelling: the hum is as big as the signal", color: BAD, weight: "bold", pill: true }
-      : cm < 0.02 ? { s: "Same noise on both inputs: it cancels, the signal stays", color: GOOD, weight: "bold", pill: true }
-        : { s: "Resistors not matched: some noise gets through. Use 1 % resistors.", color: BAD, weight: "bold", pill: true },
-    { s: "Used in microphone cables (balanced XLR), aircraft sensors, ECG machines.", color: MUTED, size: 16 },
+    { s: (D6.single ? "V_{out} = wire 1" : "V_{out} = wire 1 − wire 2") + "     noise left " + (cm * 100).toFixed(1) + " %", weight: "bold", color: COUT },
+    D6.single ? { s: "NOISY", color: BAD, weight: "bold", pill: true }
+      : cm < 0.02 ? { s: "NOISE CANCELLED", color: GOOD, weight: "bold", pill: true }
+        : { s: "RESISTORS NOT MATCHED", color: BAD, weight: "bold", pill: true },
   ]);
   scope(790, 24, 580, 240, { title: "Wire 1 (to V_{+}): signal + noise", vdiv: 1, traces: [{ f: vB6, color: CIN }] });
   scope(790, 270, 580, 230, { title: "Wire 2 (to V_{−}): noise only", vdiv: 1, traces: [{ f: vA6, color: "#7a8396" }] });
