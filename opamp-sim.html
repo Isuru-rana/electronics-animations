@@ -185,7 +185,7 @@ function scope(x, y, w, h, o) {
   for (const tr of o.traces) {
     ctx.strokeStyle = tr.color; ctx.lineWidth = tr.width || 3; ctx.setLineDash(tr.dash || []);
     ctx.beginPath();
-    for (let px = 0; px <= gw; px += 2) {
+    for (let px = 0; px <= gw; px += 1) {
       const tau = t - WIN + WIN * px / gw, v = tr.f(tau), py = cy - v * k;
       px ? ctx.lineTo(gx + px, py) : ctx.moveTo(gx + px, py);
     }
@@ -579,7 +579,7 @@ function s5Controls() {
 // ======================================================================
 const D6 = { noise: 2.0, mis: 0, single: false };
 const sig6 = tt => 0.9 * sin(TAU * 1.0 * tt);
-const hum6 = tt => D6.noise * (0.8 * sin(TAU * 0.3 * tt) + 0.25 * sin(TAU * 0.9 * tt + 1));
+const hum6 = tt => D6.noise * (0.5 * sin(TAU * 9.3 * tt) + 0.3 * sin(TAU * 15.7 * tt + 1) + 0.2 * sin(TAU * 6.1 * tt + 2));   // high frequency interference
 const vA6 = tt => hum6(tt);                  // reference wire: noise only, to V-
 const vB6 = tt => sig6(tt) + hum6(tt);       // signal wire: signal + noise, to V+
 function out6(tt) {
@@ -598,7 +598,7 @@ function s6Draw() {
   text("noise", 250, yA + 12, 14, MUTED, "left", "bold");
   // mains cable inducing noise
   poly([[150, 130], [370, 130]], "#9a6b00", 10);
-  text("Mains 50 Hz", 260, 108, 15, "#9a6b00", "center", "bold");
+  text("Radio / motor interference", 260, 108, 15, "#9a6b00", "center", "bold");
   for (const x of [165, 215]) {
     const n = Math.abs(hum6(t)) / Math.max(0.01, D6.noise) * (D6.noise > 0 ? 1 : 0);
     poly([[x, 142], [x - 10, 175], [x + 6, 175], [x - 4, yA - 18]], "#e0a000", 2.5);
