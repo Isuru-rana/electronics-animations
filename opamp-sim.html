@@ -234,12 +234,14 @@ const kfmt = v => (v >= 1000 ? v / 1000 + " MΩ" : v + " kΩ");
 // ======================================================================
 // Scene 1: open loop and closed loop
 // ======================================================================
-const L1 = { closed: false, vd: 20, noise: false, vin: 1.5, vout: 0, hist: [], fbPath: null };
+const L1 = { closed: false, vd: 20, noise: false, sine: false, vin: 1.5, vout: 0, hist: [], fbPath: null };
 function s1Update(dt) {
   if (!L1.closed) {
     const n = L1.noise ? 1e-3 * (sin(TAU * 3.1 * t) + 0.6 * sin(TAU * 7.3 * t + 1)) / 1.6 : 0;
-    L1.vdEff = L1.vd * 1e-6 + n;
+    L1.vdEff = (L1.sine ? L1.vd * sin(TAU * FV * t) : L1.vd) * 1e-6 + n;
     L1.vout = clip(AOL * L1.vdEff);
+    L1.hist.push({ t, vd: L1.vdEff * 1e6, vout: L1.vout });
+    while (L1.hist.length && L1.hist[0].t < t - 8) L1.hist.shift();
   } else {
     // Slowed-down op-amp: the output ramps at a rate set by the input difference
     const vm = L1.vout / 2;                       // R_f = R_in = 10 k: V- is half of V_out
@@ -257,7 +259,7 @@ function s1Draw() {
     ground(A.minus[0] - 60, A.minus[1]);
     poly([A.plus, [200, A.plus[1]], [200, A.plus[1] + 40]]);
     generator(200, A.plus[1] + 66, 26, CIN); poly([[200, A.plus[1] + 92], [200, A.plus[1] + 110]]); ground(200, A.plus[1] + 110);
-    text("DC", 160, A.plus[1] + 66, 14, CIN, "right", "bold");
+    text(L1.sine ? "AC" : "DC", 160, A.plus[1] + 66, 14, CIN, "right", "bold");
     tag("V_{+} − V_{−} = " + (L1.vdEff * 1e6).toFixed(1) + " µV", 232, A.plus[1] + 66, CIN, "left");
     poly([A.out, [600, 300]]);
   } else {
@@ -291,25 +293,27 @@ function s1Draw() {
       { s: "V_{out} = 200 000 × (V_{+} − V_{−})", weight: "bold", color: COUT },
       sat ? { s: "SATURATED", color: BAD, weight: "bold", pill: true } : { s: "LINEAR", color: GOOD, weight: "bold", pill: true },
     ]);
-    // transfer graph
-    const gx0 = 860, gx1 = 1340, gy0 = 90, gy1 = 650;
+    // time charts: input (µV) on top, output (V) below
     box(790, 24, 580, 720);
-    text("V_{out} against V_{+} − V_{−} (open loop)", 810, 52, 19, INK, "left", "bold");
-    const X = v => gx0 + (v + 100) / 200 * (gx1 - gx0), Y = v => (gy0 + gy1) / 2 - v / 9 * (gy1 - gy0) / 2;
-    ctx.fillStyle = "#18a05814"; ctx.fillRect(X(-37.5), gy0, X(37.5) - X(-37.5), gy1 - gy0);
-    ctx.strokeStyle = GRID; ctx.lineWidth = 1;
-    for (let v = -100; v <= 100; v += 25) { ctx.beginPath(); ctx.moveTo(X(v), gy0); ctx.lineTo(X(v), gy1); ctx.stroke(); text(String(v), X(v), gy1 + 18, 13, MUTED, "center"); }
-    for (let v = -9; v <= 9; v += 3) { ctx.beginPath(); ctx.moveTo(gx0, Y(v)); ctx.lineTo(gx1, Y(v)); ctx.stroke(); text(String(v), gx0 - 10, Y(v), 13, MUTED, "right"); }
-    text("V_{+} − V_{−} (µV)", (gx0 + gx1) / 2, gy1 + 44, 15, MUTED, "center");
-    ctx.save(); ctx.translate(820, (gy0 + gy1) / 2); ctx.rotate(-Math.PI / 2); text("V_{out} (V)", 0, 0, 15, MUTED, "center"); ctx.restore();
-    for (const r of [VSAT, -VSAT]) poly([[gx0, Y(r)], [gx1, Y(r)]], BAD, 1.5, [7, 6]);
-    text("+7.5 V", gx0 + 8, Y(VSAT) - 14, 14, BAD, "left", "bold");
-    text("−7.5 V", gx1 - 8, Y(-VSAT) + 16, 14, BAD, "right", "bold");
-    text("linear region", X(0), gy0 + 18, 14, GOOD, "center", "bold");
-    const pts = []; for (let v = -100; v <= 100; v += 0.5) pts.push([X(v), Y(clip(AOL * v * 1e-6))]);
-    poly(pts, COUT, 4);
-    const lv = Math.max(-100, Math.min(100, L1.vdEff * 1e6));
-    dot(X(lv), Y(L1.vout), 9, Math.abs(L1.vout) >= VSAT - 1e-6 ? BAD : CIN);
+    text("Last 8 seconds", 810, 52, 19, INK, "left", "bold");
+    const gx0 = 850, gx1 = 1350, X = tt => gx0 + (tt - (t - 8)) / 8 * (gx1 - gx0);
+    const plot = (y0, y1, ymax, step, key, color, unit, band) => {
+      const Y = v => (y0 + y1) / 2 - Math.max(-ymax, Math.min(ymax, v)) / ymax * (y1 - y0) / 2;
+      if (band) { ctx.fillStyle = "#18a05814"; ctx.fillRect(gx0, Y(band), gx1 - gx0, Y(-band) - Y(band)); }
+      ctx.strokeStyle = GRID; ctx.lineWidth = 1;
+      for (let v = -ymax; v <= ymax + 1e-9; v += step) { ctx.beginPath(); ctx.moveTo(gx0, Y(v)); ctx.lineTo(gx1, Y(v)); ctx.stroke(); text(String(v), gx0 - 10, Y(v), 13, MUTED, "right"); }
+      if (L1.hist.length > 1) poly(L1.hist.map(h => [X(h.t), Y(h[key])]), color, 3.5);
+      return Y;
+    };
+    const ymax = L1.noise ? 1500 : 100;
+    text("V_{+} − V_{−} (µV)", gx0, 88, 16, CIN, "left", "bold");
+    const Yi = plot(105, 335, ymax, ymax / 2, "vd", CIN, "µV", ymax === 100 ? 37.5 : 0);
+    if (ymax === 100) text("linear band ±37.5 µV", gx1, Yi(37.5) - 12, 13, GOOD, "right", "bold");
+    text("V_{out} (V)", gx0, 400, 16, COUT, "left", "bold");
+    const Yo = plot(420, 700, 9, 3, "vout", COUT, "V");
+    for (const r of [VSAT, -VSAT]) poly([[gx0, Yo(r)], [gx1, Yo(r)]], BAD, 1.5, [7, 6]);
+    text("+7.5 V", gx1, Yo(VSAT) - 12, 13, BAD, "right", "bold");
+    text("−7.5 V", gx1, Yo(-VSAT) + 14, 13, BAD, "right", "bold");
   } else {
     const err = L1.vin - L1.vout / 2, steady = Math.abs(err) < 0.002;
     const sat = Math.abs(L1.vout) >= VSAT - 1e-6;
@@ -336,10 +340,11 @@ function s1Draw() {
   }
 }
 function s1Controls() {
-  addBtn("Open loop", !L1.closed, () => { L1.closed = false; setScene(0); });
+  addBtn("Open loop", !L1.closed, () => { L1.closed = false; L1.hist = []; setScene(0); });
   addBtn("Closed loop", L1.closed, () => { L1.closed = true; L1.hist = []; setScene(0); });
   if (!L1.closed) {
     addSlider("V_{+} − V_{−}", -100, 100, 1, L1.vd, v => (L1.vd = v), v => v + " µV");
+    addBtn("Sine input", L1.sine, (b) => { L1.sine = !L1.sine; b.classList.toggle("on", L1.sine); });
     addBtn("Input noise 1 mV", L1.noise, (b) => { L1.noise = !L1.noise; b.classList.toggle("on", L1.noise); });
   } else {
     addSlider("V_in", -4, 4, 0.1, L1.vin, v => (L1.vin = v), v => v.toFixed(1) + " V");
