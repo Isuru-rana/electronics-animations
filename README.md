@@ -11,6 +11,7 @@ Live: https://isuru-rana.github.io/electronics-animations/
 | `bridge-sim.html` | Bridge rectifier: diode pairs per half cycle, input and output graphs, open D3 fault |
 | `transistor-tap-sim.html` | NPN transistor next to a water tap: cut-off, active, saturation |
 | `zener-regulator-sim.html` | Zener regulator: V_in sweep, loads, current split, Zener reverse characteristic with live operating point, worksheet table; backwards and burn-out faults |
+| `opamp-sim.html` | Op-amp: open and closed loop, inverting, non inverting, gain control, noise cancelling headphones, differential amplifier |
 | `diode-meter-sim.html` | Diode knee voltage circuit; how a voltmeter reads the difference between red and COM |
 
 ## Controls
@@ -22,6 +23,8 @@ Live: https://isuru-rana.github.io/electronics-animations/
 **Full wave and bridge sims:** Space: pause. Right: step. F: fullscreen. Speed slider slows or speeds the 50 Hz cycle.
 
 **Zener sim:** Left / Right: V_in (Shift: 1 V steps). 1, 2, 3: no load, 1 kΩ, 470 Ω. R: record. S: sweep. F: fullscreen. "R_S 22 Ω" overheats and burns the Zener; "Replace Zener" resets it.
+
+**Op-amp sim:** 1 to 6: scenes. Space: pause. F: fullscreen. Scene 4: drag the knob to change the gain.
 
 **Transistor tap sim:** Left / Right: base voltage. 1, 2, 3: cut-off, active, saturation. F: fullscreen.
 

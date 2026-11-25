@@ -1,0 +1,717 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>How an Op-Amp Works</title>
+<style>
+  :root { --bg:#f6f7fb; --panel:#ffffff; --ink:#1a2233; --muted:#5b6478; --accent:#1f6fd6; }
+  * { box-sizing:border-box; }
+  html,body { margin:0; height:100%; background:var(--bg); color:var(--ink);
+    font-family:"Segoe UI", Roboto, Arial, sans-serif; overflow:hidden; }
+  #wrap { position:absolute; inset:0; display:flex; flex-direction:column; }
+  #stage { flex:1; position:relative; }
+  canvas { position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); touch-action:none; }
+  .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; padding:7px 16px;
+    background:var(--panel); border-top:1px solid #dfe3ea; font-size:15px; }
+  .row label { color:var(--muted); }
+  .val { min-width:70px; font-weight:bold; }
+  input[type=range] { width:170px; accent-color:var(--accent); }
+  button { background:#eef1f6; color:var(--ink); border:1px solid #cfd5e0; border-radius:6px;
+    padding:6px 11px; font-size:14px; cursor:pointer; }
+  button:hover { background:#e2e7f0; }
+  button.on { background:#dbe9fb; border-color:#1f6fd6; font-weight:bold; }
+  button.warn { background:#fde2e2; border-color:#d93636; }
+  .sp { flex:1; }
+  .keys { color:var(--muted); font-size:12px; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div id="stage"><canvas id="c"></canvas></div>
+  <div class="row" id="tabs"></div>
+  <div class="row" id="ctl"></div>
+</div>
+<script>
+"use strict";
+// ======================================================================
+// Model constants: 741 on +/-9 V supplies
+// ======================================================================
+const AOL = 200000, VSAT = 7.5, FV = 0.5;          // FV: on-screen signal frequency (slowed down)
+const clip = v => Math.max(-VSAT, Math.min(VSAT, v));
+const sin = Math.sin, TAU = 2 * Math.PI;
+
+// ======================================================================
+// Canvas
+// ======================================================================
+const W = 1400, H = 760;
+const cv = document.getElementById("c"), ctx = cv.getContext("2d");
+let scaleS = 1;
+function fit() {
+  const st = document.getElementById("stage");
+  const s = Math.min(st.clientWidth / W, st.clientHeight / H), dpr = window.devicePixelRatio || 1;
+  scaleS = s;
+  cv.style.width = W * s + "px"; cv.style.height = H * s + "px";
+  cv.width = W * s * dpr; cv.height = H * s * dpr; ctx.setTransform(s * dpr, 0, 0, s * dpr, 0, 0);
+}
+window.addEventListener("resize", fit);
+
+const INK = "#1a2233", MUTED = "#5b6478", GRID = "#e1e5ec", WIRE = "#4a5468", OFFC = "#b8bfcc";
+const CIN = "#e07a00", COUT = "#1f6fd6", CM = "#8a3ffc", GOOD = "#18a058", BAD = "#d93636", FB = "#c2185b";
+
+// ---------- text with subscripts: "V_{out}" or "V_d"
+function font(size, weight) { return `${weight} ${size}px Segoe UI, Arial`; }
+function parseRich(str) {
+  const out = []; const rx = /_\{([^}]*)\}|_([A-Za-z0-9+\-−])/g; let pos = 0, m;
+  while ((m = rx.exec(str))) {
+    if (m.index > pos) out.push({ t: str.slice(pos, m.index), s: false });
+    out.push({ t: m[1] !== undefined ? m[1] : m[2], s: true }); pos = rx.lastIndex;
+  }
+  if (pos < str.length) out.push({ t: str.slice(pos), s: false });
+  return out;
+}
+function richWidth(str, size, weight = "normal") {
+  let w = 0;
+  for (const p of parseRich(str)) { ctx.font = font(p.s ? size * 0.66 : size, weight); w += ctx.measureText(p.t).width; }
+  return w;
+}
+function text(str, x, y, size = 16, color = INK, align = "left", weight = "normal") {
+  const segs = parseRich(String(str)), w = richWidth(String(str), size, weight);
+  let cx = align === "center" ? x - w / 2 : align === "right" ? x - w : x;
+  ctx.fillStyle = color; ctx.textBaseline = "middle"; ctx.textAlign = "left";
+  for (const p of segs) {
+    ctx.font = font(p.s ? size * 0.66 : size, weight);
+    ctx.fillText(p.t, cx, p.s ? y + size * 0.3 : y); cx += ctx.measureText(p.t).width;
+  }
+  return cx;
+}
+function poly(pts, color = WIRE, w = 3.5, dash) {
+  ctx.strokeStyle = color; ctx.lineWidth = w; ctx.lineCap = "round"; ctx.lineJoin = "round";
+  ctx.setLineDash(dash || []);
+  ctx.beginPath(); ctx.moveTo(pts[0][0], pts[0][1]); for (const p of pts.slice(1)) ctx.lineTo(p[0], p[1]); ctx.stroke();
+  ctx.setLineDash([]);
+}
+function roundRect(x, y, w, h, r) {
+  ctx.beginPath(); ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath();
+}
+function box(x, y, w, h, fill = "#fff", stroke = "#dfe3ea") {
+  roundRect(x, y, w, h, 12); ctx.fillStyle = fill; ctx.fill(); ctx.strokeStyle = stroke; ctx.lineWidth = 1.5; ctx.stroke();
+}
+function tag(label, x, y, bg, align = "center", fg = "#fff") {
+  const w = richWidth(label, 16, "bold") + 18;
+  const x0 = align === "center" ? x - w / 2 : align === "right" ? x - w : x;
+  roundRect(x0, y - 14, w, 28, 7); ctx.fillStyle = bg; ctx.fill();
+  text(label, x0 + 9, y + 1, 16, fg, "left", "bold");
+}
+function dot(x, y, r = 6, c = INK) { ctx.fillStyle = c; ctx.beginPath(); ctx.arc(x, y, r, 0, TAU); ctx.fill(); }
+function terminal(x, y) { ctx.fillStyle = "#fff"; ctx.strokeStyle = WIRE; ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(x, y, 6, 0, TAU); ctx.fill(); ctx.stroke(); }
+
+// ---------- components
+function zigH(x0, x1, y, color = WIRE) {
+  const n = 6, d = (x1 - x0) / n, pts = [[x0, y]];
+  for (let k = 0; k < n; k++) pts.push([x0 + d * (k + 0.5), y + (k % 2 ? 12 : -12)]);
+  pts.push([x1, y]); poly(pts, color);
+}
+function zigV(x, y0, y1, color = WIRE) {
+  const n = 6, d = (y1 - y0) / n, pts = [[x, y0]];
+  for (let k = 0; k < n; k++) pts.push([x + (k % 2 ? -12 : 12), y0 + d * (k + 0.5)]);
+  pts.push([x, y1]); poly(pts, color);
+}
+function ground(x, y) {
+  poly([[x, y], [x, y + 12]]);
+  for (let k = 0; k < 3; k++) poly([[x - 18 + k * 6, y + 12 + k * 7], [x + 18 - k * 6, y + 12 + k * 7]], WIRE, 3);
+}
+function generator(x, y, r = 26, color = CIN) {
+  ctx.fillStyle = "#fff"; ctx.strokeStyle = color; ctx.lineWidth = 3.5; ctx.beginPath(); ctx.arc(x, y, r, 0, TAU); ctx.fill(); ctx.stroke();
+  ctx.beginPath();
+  for (let k = 0; k <= 30; k++) { const xx = x - r * 0.6 + k * r * 1.2 / 30, yy = y - r * 0.35 * sin(k / 30 * TAU); k ? ctx.lineTo(xx, yy) : ctx.moveTo(xx, yy); }
+  ctx.stroke();
+}
+// Op-amp triangle. Returns the ends of the input leads and the output tip.
+function opamp(cx, cy, o = {}) {
+  const w = o.w || 110, h = o.h || 120, x0 = cx - w / 2, x1 = cx + w / 2;
+  const yTop = cy - h / 4, yBot = cy + h / 4;
+  if (!o.noSupply) {
+    poly([[cx, cy - h / 4], [cx, cy - h / 4 - 24]]); text(o.vp || "+9 V", cx, cy - h / 4 - 36, 14, MUTED, "center");
+    poly([[cx, cy + h / 4], [cx, cy + h / 4 + 24]]); text(o.vn || "−9 V", cx, cy + h / 4 + 36, 14, MUTED, "center");
+  }
+  poly([[x0 - 24, yTop], [x0, yTop]]); poly([[x0 - 24, yBot], [x0, yBot]]);
+  ctx.fillStyle = "#fff"; ctx.strokeStyle = o.color || INK; ctx.lineWidth = 3.5;
+  ctx.beginPath(); ctx.moveTo(x0, cy - h / 2); ctx.lineTo(x1, cy); ctx.lineTo(x0, cy + h / 2); ctx.closePath(); ctx.fill(); ctx.stroke();
+  const top = o.plusTop ? "+" : "−", bot = o.plusTop ? "−" : "+";
+  text(top, x0 + 14, yTop, 24, INK, "center", "bold"); text(bot, x0 + 14, yBot, 24, INK, "center", "bold");
+  if (o.name !== "") text(o.name || "741", x0 + 44, cy, 15, MUTED, "center", "bold");
+  const tp = [x0 - 24, yTop], bp = [x0 - 24, yBot];
+  return { minus: o.plusTop ? bp : tp, plus: o.plusTop ? tp : bp, out: [x1, cy] };
+}
+
+// ---------- moving charge dots along a path (conventional current)
+function mkPath(pts) {
+  let L = 0; const seg = [];
+  for (let k = 1; k < pts.length; k++) { const l = Math.hypot(pts[k][0] - pts[k - 1][0], pts[k][1] - pts[k - 1][1]); seg.push(l); L += l; }
+  return { pts, seg, L, ph: 0 };
+}
+function at(p, s) {
+  s = Math.max(0, Math.min(p.L, s));
+  for (let k = 0; k < p.seg.length; k++) {
+    if (s <= p.seg[k]) { const a = p.pts[k], b = p.pts[k + 1], u = p.seg[k] ? s / p.seg[k] : 0; return [a[0] + (b[0] - a[0]) * u, a[1] + (b[1] - a[1]) * u]; }
+    s -= p.seg[k];
+  }
+  return p.pts[p.pts.length - 1];
+}
+const GAP = 28;
+function flow(p, mA, color, dt) {
+  p.ph += Math.max(-260, Math.min(260, mA * 70)) * dt;
+  if (Math.abs(mA) < 0.004) return;
+  ctx.fillStyle = color; const off = ((p.ph % GAP) + GAP) % GAP;
+  for (let s = off; s < p.L; s += GAP) { const q = at(p, s); ctx.beginPath(); ctx.arc(q[0], q[1], 4.5, 0, TAU); ctx.fill(); }
+}
+
+// ---------- scope: rolling traces over the last WIN seconds
+const WIN = 4;
+function scope(x, y, w, h, o) {
+  box(x, y, w, h);
+  text(o.title, x + 16, y + 24, 18, INK, "left", "bold");
+  const gx = x + 14, gy = y + 46, gw = w - 28, gh = h - 82, nx = 10, ny = 8, vdiv = o.vdiv || 2;
+  ctx.fillStyle = "#fbfcfe"; ctx.fillRect(gx, gy, gw, gh);
+  ctx.strokeStyle = GRID; ctx.lineWidth = 1;
+  for (let i = 0; i <= nx; i++) { ctx.beginPath(); ctx.moveTo(gx + gw * i / nx, gy); ctx.lineTo(gx + gw * i / nx, gy + gh); ctx.stroke(); }
+  for (let j = 0; j <= ny; j++) { ctx.beginPath(); ctx.moveTo(gx, gy + gh * j / ny); ctx.lineTo(gx + gw, gy + gh * j / ny); ctx.stroke(); }
+  ctx.strokeStyle = "#c5ccd8"; ctx.beginPath(); ctx.moveTo(gx, gy + gh / 2); ctx.lineTo(gx + gw, gy + gh / 2); ctx.stroke();
+  const cy = gy + gh / 2, k = (gh / ny) / vdiv;
+  if (o.rails) for (const r of [VSAT, -VSAT]) poly([[gx, cy - r * k], [gx + gw, cy - r * k]], BAD + "88", 1.5, [6, 5]);
+  ctx.save(); ctx.beginPath(); ctx.rect(gx, gy, gw, gh); ctx.clip();
+  for (const tr of o.traces) {
+    ctx.strokeStyle = tr.color; ctx.lineWidth = tr.width || 3; ctx.setLineDash(tr.dash || []);
+    ctx.beginPath();
+    for (let px = 0; px <= gw; px += 2) {
+      const tau = t - WIN + WIN * px / gw, v = tr.f(tau), py = cy - v * k;
+      px ? ctx.lineTo(gx + px, py) : ctx.moveTo(gx + px, py);
+    }
+    ctx.stroke(); ctx.setLineDash([]);
+  }
+  ctx.restore();
+  // legend + scale
+  let lx = gx;
+  for (const tr of o.traces) {
+    if (!tr.label) continue;
+    poly([[lx, gy + gh + 20], [lx + 22, gy + gh + 20]], tr.color, 4, tr.dash);
+    lx = text(tr.label, lx + 28, gy + gh + 20, 15, INK, "left", "bold") + 18;
+  }
+  text(vdiv + " V/div", gx + gw, gy + gh + 20, 13, MUTED, "right");
+}
+function readout(lines, x = 30, y = 548, w = 730, h = 196) {
+  box(x, y, w, h);
+  let yy = y + 30;
+  for (const L of lines) {
+    if (L.pill) { roundRect(x + 14, yy - 17, w - 28, 34, 8); ctx.fillStyle = L.color + "18"; ctx.fill(); }
+    text(L.s, x + (L.pill ? 28 : 22), yy, L.size || 18, L.color || INK, "left", L.weight || "normal");
+    yy += L.gap || 38;
+  }
+}
+function header(title, subtitle) {
+  text(title, 40, 36, 28, INK, "left", "bold");
+  text(subtitle, 40, 70, 16, MUTED, "left");
+}
+
+// ======================================================================
+// Scenes
+// ======================================================================
+const SCENES = [
+  { key: "loop", name: "1 Open and closed loop" },
+  { key: "inv", name: "2 Inverting" },
+  { key: "non", name: "3 Non inverting" },
+  { key: "gain", name: "4 Gain control" },
+  { key: "anc", name: "5 Noise cancelling" },
+  { key: "diff", name: "6 Noisy cable" },
+];
+let scene = 0, t = 0, paused = false, lastDt = 0;
+
+// ---------- shared resistor value list (kOhm)
+const EVALS = [1, 2.2, 4.7, 10, 22, 47, 100, 220, 470];
+const kfmt = v => (v >= 1000 ? v / 1000 + " MΩ" : v + " kΩ");
+
+// ======================================================================
+// Scene 1: open loop and closed loop
+// ======================================================================
+const L1 = { closed: false, vd: 20, noise: false, vin: 1.5, vout: 0, hist: [], fbPath: null };
+function s1Update(dt) {
+  if (!L1.closed) {
+    const n = L1.noise ? 1e-3 * (sin(TAU * 3.1 * t) + 0.6 * sin(TAU * 7.3 * t + 1)) / 1.6 : 0;
+    L1.vdEff = L1.vd * 1e-6 + n;
+    L1.vout = clip(AOL * L1.vdEff);
+  } else {
+    // Slowed-down op-amp: the output ramps at a rate set by the input difference
+    const vm = L1.vout / 2;                       // R_f = R_in = 10 k: V- is half of V_out
+    L1.vout = clip(L1.vout + 3.0 * (L1.vin - vm) * dt * 2);
+    L1.hist.push({ t, vin: L1.vin, vm: L1.vout / 2, vout: L1.vout });
+    while (L1.hist.length && L1.hist[0].t < t - 8) L1.hist.shift();
+  }
+}
+function s1Draw() {
+  header("Open Loop and Closed Loop", "An op-amp amplifies V_{+} − V_{−} about 200 000 times. Feedback tames that huge gain.");
+  const A = opamp(400, 300, { name: "741" });
+  if (!L1.closed) {
+    // V- to 0 V, V+ from a tiny DC source
+    poly([A.minus, [A.minus[0] - 60, A.minus[1]]]);
+    ground(A.minus[0] - 60, A.minus[1]);
+    poly([A.plus, [200, A.plus[1]], [200, A.plus[1] + 40]]);
+    generator(200, A.plus[1] + 66, 26, CIN); poly([[200, A.plus[1] + 92], [200, A.plus[1] + 110]]); ground(200, A.plus[1] + 110);
+    text("DC", 160, A.plus[1] + 66, 14, CIN, "right", "bold");
+    tag("V_{+} − V_{−} = " + (L1.vdEff * 1e6).toFixed(1) + " µV", 232, A.plus[1] + 66, CIN, "left");
+    poly([A.out, [600, 300]]);
+  } else {
+    // non inverting, gain 2: R_f = R_in = 10 k (feedback in colour)
+    const nx = A.minus[0] - 30;
+    poly([A.minus, [nx, A.minus[1]]], FB); dot(nx, A.minus[1], 6, FB);
+    poly([[nx, A.minus[1]], [nx, 170], [440, 170]], FB); zigH(440, 520, 170, FB); poly([[520, 170], [560, 170], [560, 300]], FB);
+    text("R_f 10 kΩ", 480, 140, 16, FB, "center", "bold");
+    poly([[nx, A.minus[1]], [nx - 30, A.minus[1]]]); zigH(nx - 130, nx - 30, A.minus[1]); poly([[nx - 130, A.minus[1]], [nx - 150, A.minus[1]], [nx - 150, A.minus[1] + 14]]); ground(nx - 150, A.minus[1] + 14);
+    text("R_{in} 10 kΩ", nx - 80, A.minus[1] + 30, 16, INK, "center", "bold");
+    poly([A.plus, [200, A.plus[1]], [200, A.plus[1] + 40]]);
+    generator(200, A.plus[1] + 66, 26, CIN); poly([[200, A.plus[1] + 92], [200, A.plus[1] + 110]]); ground(200, A.plus[1] + 110);
+    text("DC", 160, A.plus[1] + 66, 14, CIN, "right", "bold");
+    poly([A.out, [600, 300]]); dot(560, 300, 6, FB);
+    text("feedback", 600, 200, 17, FB, "left", "bold");
+    tag("V_{+} = " + L1.vin.toFixed(2) + " V", 232, A.plus[1] + 66, CIN, "left");
+    tag("V_{−} = " + (L1.vout / 2).toFixed(3) + " V", nx - 8, 235, CM, "right");
+  }
+  // output meter
+  const mx = 610, my = 250;
+  box(mx, my, 140, 100, "#fff", "#c5ccd8");
+  text("V_{out}", mx + 70, my + 22, 16, MUTED, "center", "bold");
+  text(L1.vout.toFixed(2) + " V", mx + 70, my + 56, 26, Math.abs(L1.vout) >= VSAT - 1e-6 ? BAD : COUT, "center", "bold");
+  const bw = 120 * Math.abs(L1.vout) / 9;
+  ctx.fillStyle = "#eef1f6"; ctx.fillRect(mx + 10, my + 80, 120, 8);
+  ctx.fillStyle = Math.abs(L1.vout) >= VSAT - 1e-6 ? BAD : COUT; ctx.fillRect(mx + 70 - (L1.vout < 0 ? bw / 2 : 0), my + 80, bw / 2, 8);
+
+  if (!L1.closed) {
+    const want = AOL * L1.vdEff, sat = Math.abs(want) > VSAT;
+    readout([
+      { s: "OPEN LOOP: no feedback", weight: "bold", color: COUT },
+      { s: "V_{out} = A_{OL} × (V_{+} − V_{−}) = 200 000 × " + (L1.vdEff * 1e6).toFixed(1) + " µV = " + want.toFixed(2) + " V" },
+      sat ? { s: "Wanted " + want.toFixed(1) + " V, but the output cannot pass the supply: SATURATED at " + (want > 0 ? "+" : "−") + "7.5 V", color: BAD, weight: "bold", pill: true }
+          : { s: "Linear only while |V_{+} − V_{−}| < 37.5 µV. A little more and it saturates.", color: GOOD, weight: "bold", pill: true },
+      { s: L1.noise ? "1 mV of noise on the input slams the output from rail to rail: useless as an amplifier." : "Turn on input noise to see why open loop is not used to amplify.", color: MUTED, size: 16 },
+    ]);
+    // transfer graph
+    const gx0 = 860, gx1 = 1340, gy0 = 90, gy1 = 650;
+    box(790, 24, 580, 720);
+    text("V_{out} against V_{+} − V_{−} (open loop)", 810, 52, 19, INK, "left", "bold");
+    const X = v => gx0 + (v + 100) / 200 * (gx1 - gx0), Y = v => (gy0 + gy1) / 2 - v / 9 * (gy1 - gy0) / 2;
+    ctx.fillStyle = "#18a05814"; ctx.fillRect(X(-37.5), gy0, X(37.5) - X(-37.5), gy1 - gy0);
+    ctx.strokeStyle = GRID; ctx.lineWidth = 1;
+    for (let v = -100; v <= 100; v += 25) { ctx.beginPath(); ctx.moveTo(X(v), gy0); ctx.lineTo(X(v), gy1); ctx.stroke(); text(String(v), X(v), gy1 + 18, 13, MUTED, "center"); }
+    for (let v = -9; v <= 9; v += 3) { ctx.beginPath(); ctx.moveTo(gx0, Y(v)); ctx.lineTo(gx1, Y(v)); ctx.stroke(); text(String(v), gx0 - 10, Y(v), 13, MUTED, "right"); }
+    text("V_{+} − V_{−} (µV)", (gx0 + gx1) / 2, gy1 + 44, 15, MUTED, "center");
+    ctx.save(); ctx.translate(820, (gy0 + gy1) / 2); ctx.rotate(-Math.PI / 2); text("V_{out} (V)", 0, 0, 15, MUTED, "center"); ctx.restore();
+    for (const r of [VSAT, -VSAT]) poly([[gx0, Y(r)], [gx1, Y(r)]], BAD, 1.5, [7, 6]);
+    text("+7.5 V: positive saturation", gx0 + 8, Y(VSAT) - 14, 14, BAD, "left", "bold");
+    text("−7.5 V: negative saturation", gx1 - 8, Y(-VSAT) + 16, 14, BAD, "right", "bold");
+    text("linear region", X(0), gy0 + 18, 14, GOOD, "center", "bold");
+    const pts = []; for (let v = -100; v <= 100; v += 0.5) pts.push([X(v), Y(clip(AOL * v * 1e-6))]);
+    poly(pts, COUT, 4);
+    const lv = Math.max(-100, Math.min(100, L1.vdEff * 1e6));
+    dot(X(lv), Y(L1.vout), 9, Math.abs(L1.vout) >= VSAT - 1e-6 ? BAD : CIN);
+  } else {
+    const err = L1.vin - L1.vout / 2, steady = Math.abs(err) < 0.002;
+    const sat = Math.abs(L1.vout) >= VSAT - 1e-6;
+    readout([
+      { s: "CLOSED LOOP: part of V_{out} is fed back to V_{−} (gain = 1 + R_f ÷ R_{in} = 2)", weight: "bold", color: FB },
+      { s: "V_{out} rises while V_{+} > V_{−}, falls while V_{+} < V_{−}, and stops when V_{−} = V_{+}." },
+      sat ? { s: "Needs " + (2 * L1.vin).toFixed(1) + " V, more than 7.5 V: saturated, V_{−} can no longer reach V_{+}", color: BAD, weight: "bold", pill: true }
+          : steady ? { s: "Settled: V_{out} = 2 × V_{in} = " + L1.vout.toFixed(2) + " V", color: GOOD, weight: "bold", pill: true }
+                   : { s: "Adjusting... difference V_{+} − V_{−} = " + err.toFixed(3) + " V", color: CIN, weight: "bold", pill: true },
+      { s: "Left over difference when settled: V_{out} ÷ 200 000 = " + (Math.abs(L1.vout) / AOL * 1e6).toFixed(1) + " µV, almost zero.", color: MUTED, size: 16 },
+    ]);
+    // time chart
+    box(790, 24, 580, 720);
+    text("Last 8 seconds", 810, 52, 19, INK, "left", "bold");
+    const gx0 = 840, gx1 = 1350, gy0 = 90, gy1 = 640;
+    const X = tt => gx0 + (tt - (t - 8)) / 8 * (gx1 - gx0), Y = v => (gy0 + gy1) / 2 - v / 9 * (gy1 - gy0) / 2;
+    ctx.strokeStyle = GRID; ctx.lineWidth = 1;
+    for (let v = -9; v <= 9; v += 3) { ctx.beginPath(); ctx.moveTo(gx0, Y(v)); ctx.lineTo(gx1, Y(v)); ctx.stroke(); text(String(v), gx0 - 10, Y(v), 13, MUTED, "right"); }
+    for (const r of [VSAT, -VSAT]) poly([[gx0, Y(r)], [gx1, Y(r)]], BAD + "88", 1.5, [7, 6]);
+    const tr = (key, color, w, dash) => { if (L1.hist.length > 1) poly(L1.hist.map(h => [X(h.t), Y(h[key])]), color, w, dash); };
+    tr("vin", CIN, 3); tr("vm", CM, 3, [8, 6]); tr("vout", COUT, 4);
+    let lx = gx0;
+    for (const [lab, c, d] of [["V_{+} (input)", CIN], ["V_{−} (fed back)", CM, [8, 6]], ["V_{out}", COUT]]) {
+      poly([[lx, gy1 + 40], [lx + 24, gy1 + 40]], c, 4, d); lx = text(lab, lx + 30, gy1 + 40, 15, INK, "left", "bold") + 24;
+    }
+  }
+}
+function s1Controls() {
+  addBtn("Open loop", !L1.closed, () => { L1.closed = false; setScene(0); });
+  addBtn("Closed loop", L1.closed, () => { L1.closed = true; L1.hist = []; setScene(0); });
+  if (!L1.closed) {
+    addSlider("V_{+} − V_{−}", -100, 100, 1, L1.vd, v => (L1.vd = v), v => v + " µV");
+    addBtn("Input noise 1 mV", L1.noise, (b) => { L1.noise = !L1.noise; b.classList.toggle("on", L1.noise); });
+  } else {
+    addSlider("V_in", -4, 4, 0.1, L1.vin, v => (L1.vin = v), v => v.toFixed(1) + " V");
+    addBtn("Step 0 / 2 V", false, () => { L1.vin = L1.vin === 2 ? 0 : 2; setScene(0); });
+  }
+}
+
+// ======================================================================
+// Scenes 2 to 4: amplifiers with a scope
+// ======================================================================
+const AMP = {
+  inv: { rin: 10, rf: 100, amp: 0.5 },
+  non: { rin: 10, rf: 22, amp: 1.0 },
+  gain: { rf: 40, amp: 0.6 },
+};
+const P = {};      // dot paths, built once per scene layout
+function invVals(tt) {
+  const a = AMP.inv, vin = a.amp * sin(TAU * FV * tt), ideal = -(a.rf / a.rin) * vin, vout = clip(ideal);
+  const clipped = Math.abs(ideal) > VSAT;
+  const vm = clipped ? (vin * a.rf + vout * a.rin) / (a.rin + a.rf) : -vout / AOL;
+  return { vin, vout, vm, clipped };
+}
+function s2Draw() {
+  const a = AMP.inv, r = invVals(t), gain = a.rf / a.rin;
+  header("Inverting Amplifier", "V_{+} is at 0 V, feedback holds V_{−} at 0 V too. Gain = −R_f ÷ R_{in}.");
+  const A = opamp(470, 300);
+  const nX = 330, nY = A.minus[1];
+  // input side
+  generator(100, 330, 26); poly([[100, 304], [100, nY], [160, nY]]); poly([[100, 356], [100, 380]]); ground(100, 380);
+  zigH(160, 290, nY); poly([[290, nY], A.minus]); dot(nX, nY);
+  text("R_{in} " + kfmt(a.rin), 225, nY - 30, 17, INK, "center", "bold");
+  // feedback
+  poly([[nX, nY], [nX, 170], [400, 170]]); zigH(400, 520, 170); poly([[520, 170], [600, 170], [600, A.out[1]]]); dot(600, A.out[1]);
+  text("R_f " + kfmt(a.rf), 460, 140, 17, INK, "center", "bold");
+  poly([A.plus, [360, A.plus[1]], [360, A.plus[1] + 30]]); ground(360, A.plus[1] + 30);
+  poly([A.out, [660, A.out[1]]]); terminal(666, A.out[1]); text("V_{out}", 680, A.out[1], 18, COUT, "left", "bold");
+  // currents (mA because R is in kOhm)
+  if (!P.inv) P.inv = { i: mkPath([[128, nY], [nX, nY]]), f: mkPath([[nX, nY], [nX, 170], [600, 170], [600, A.out[1]]]) };
+  const iin = (r.vin - r.vm) / a.rin, ifb = (r.vm - r.vout) / a.rf;
+  flow(P.inv.i, iin, CIN, lastDt); flow(P.inv.f, ifb, FB, lastDt);
+  // tags
+  tag("V_{in} " + r.vin.toFixed(2) + " V", 100, 236, CIN);
+  tag("V_{−} " + (r.clipped ? r.vm.toFixed(2) + " V" : (r.vm * 1e6).toFixed(1) + " µV"), nX - 8, 214, r.clipped ? BAD : CM, "right");
+  tag("V_{out} " + r.vout.toFixed(2) + " V", 690, 250, COUT);
+  text("I = " + Math.abs(iin).toFixed(3) + " mA", 225, nY + 32, 15, CIN, "center", "bold");
+  readout([
+    { s: "A_v = −R_f ÷ R_{in} = −" + kfmt(a.rf).replace(" kΩ", "") + " ÷ " + kfmt(a.rin).replace(" kΩ", "") + " = −" + gain.toFixed(gain < 10 ? 2 : 1), weight: "bold", color: COUT },
+    { s: "V_{in} peak " + a.amp.toFixed(2) + " V, so V_{out} peak should be " + (a.amp * gain).toFixed(2) + " V, upside down (180°)" },
+    a.amp * gain > VSAT ? { s: "CLIPPING: the output cannot pass ±7.5 V. While it is stuck, V_{−} leaves 0 V.", color: BAD, weight: "bold", pill: true }
+      : { s: "V_{−} stays at 0 V (virtual earth): all of I flows on through R_f", color: GOOD, weight: "bold", pill: true },
+    { s: "I = V_{in} ÷ R_{in}, then V_{out} = −I × R_f. Bigger R_f or smaller R_{in}: more gain.", color: MUTED, size: 16 },
+  ]);
+  scope(790, 24, 580, 720, { title: "Scope", vdiv: 2, rails: true, traces: [
+    { f: tt => invVals(tt).vin, color: CIN, label: "V_{in}" },
+    { f: tt => invVals(tt).vout, color: COUT, label: "V_{out}", width: 3.5 }] });
+}
+function s2Controls() {
+  addList("R_in", EVALS.slice(0, 7), AMP.inv.rin, v => { AMP.inv.rin = v; }, kfmt);
+  addList("R_f", EVALS, AMP.inv.rf, v => { AMP.inv.rf = v; }, kfmt);
+  addSlider("V_in peak", 0, 3, 0.05, AMP.inv.amp, v => (AMP.inv.amp = v), v => v.toFixed(2) + " V");
+}
+
+function nonVals(tt, a = AMP.non) {
+  const vin = a.amp * sin(TAU * FV * tt), g = 1 + a.rf / a.rin, ideal = g * vin, vout = clip(ideal);
+  const vm = vout * a.rin / (a.rin + a.rf);
+  return { vin, vout, vm, clipped: Math.abs(ideal) > VSAT, g };
+}
+function nonCircuit(a, r, opts = {}) {
+  const A = opamp(470, 300);
+  const nX = 330, nY = A.minus[1];
+  // V+ from the source
+  generator(160, 400, 26); poly([[160, 374], [160, A.plus[1]], A.plus]); poly([[160, 426], [160, 440]]); ground(160, 440);
+  // R_in from V- to 0 V
+  poly([A.minus, [nX, nY]]); dot(nX, nY);
+  poly([[nX, nY], [270, nY]]); zigH(150, 270, nY); poly([[150, nY], [120, nY], [120, nY + 14]]); ground(120, nY + 14);
+  text("R_{in} " + kfmt(a.rin), 210, nY - 30, 17, INK, "center", "bold");
+  // feedback R_f (or the volume pot)
+  poly([[nX, nY], [nX, 170], [400, 170]]); zigH(400, 520, 170, opts.pot ? FB : WIRE); poly([[520, 170], [600, 170], [600, A.out[1]]]); dot(600, A.out[1]);
+  if (!opts.pot) text("R_f " + kfmt(a.rf), 460, 140, 17, INK, "center", "bold");
+  poly([A.out, [660, A.out[1]]]);
+  if (!P[opts.key]) P[opts.key] = { f: mkPath([[600, A.out[1]], [600, 170], [nX, 170], [nX, nY], [150, nY], [120, nY], [120, nY + 14]]) };
+  flow(P[opts.key].f, r.vout / (a.rin + a.rf), FB, lastDt);
+  tag("V_{in} " + r.vin.toFixed(2) + " V", 196, 400, CIN, "left");
+  tag("V_{−} " + r.vm.toFixed(2) + " V", nX - 8, 214, r.clipped ? BAD : CM, "right");
+  return A;
+}
+function s3Draw() {
+  const a = AMP.non, r = nonVals(t);
+  header("Non Inverting Amplifier", "Input goes to V_{+}. Feedback makes V_{−} follow it. Gain = 1 + R_f ÷ R_{in}, output in phase.");
+  const A = nonCircuit(a, r, { key: "non" });
+  terminal(666, A.out[1]); text("V_{out}", 680, A.out[1], 18, COUT, "left", "bold");
+  tag("V_{out} " + r.vout.toFixed(2) + " V", 690, 250, COUT);
+  readout([
+    { s: "A_v = 1 + R_f ÷ R_{in} = 1 + " + a.rf + " ÷ " + a.rin + " = " + r.g.toFixed(2), weight: "bold", color: COUT },
+    { s: "V_{in} peak " + a.amp.toFixed(2) + " V, so V_{out} peak should be " + (a.amp * r.g).toFixed(2) + " V, in phase" },
+    a.amp * r.g > VSAT ? { s: "CLIPPING: output stuck at the ±7.5 V limit, V_{−} can no longer follow V_{in}", color: BAD, weight: "bold", pill: true }
+      : { s: "V_{−} follows V_{in}: R_f and R_{in} divide V_{out} back down to V_{in}", color: GOOD, weight: "bold", pill: true },
+    { s: "Gain is never below 1. The input takes almost no current from the source.", color: MUTED, size: 16 },
+  ]);
+  scope(790, 24, 580, 720, { title: "Scope", vdiv: 2, rails: true, traces: [
+    { f: tt => nonVals(tt).vin, color: CIN, label: "V_{in}" },
+    { f: tt => nonVals(tt).vout, color: COUT, label: "V_{out}", width: 3.5 }] });
+}
+function s3Controls() {
+  addList("R_in", EVALS.slice(0, 7), AMP.non.rin, v => { AMP.non.rin = v; }, kfmt);
+  addList("R_f", [0, ...EVALS], AMP.non.rf, v => { AMP.non.rf = v; }, v => (v ? kfmt(v) : "0 Ω (follower)"));
+  addSlider("V_in peak", 0, 3, 0.05, AMP.non.amp, v => (AMP.non.amp = v), v => v.toFixed(2) + " V");
+}
+
+// ---------- scene 4: volume knob (R_f is a 100 k pot)
+const KNOB = { x: 650, y: 112, r: 30 };
+let dragKnob = false;
+function gainVals(tt) { return nonVals(tt, { rin: 10, rf: AMP.gain.rf, amp: AMP.gain.amp }); }
+function s4Draw() {
+  const g = AMP.gain, r = gainVals(t), gain = 1 + g.rf / 10;
+  header("Gain Control (Volume Knob)", "R_f is a 100 kΩ pot. Turning it changes the gain from ×1 to ×11.");
+  const A = nonCircuit({ rin: 10, rf: g.rf }, r, { pot: true, key: "gain" });
+  // pot arrow and knob
+  poly([[420, 196], [506, 146]], FB, 3); ctx.fillStyle = FB; ctx.beginPath(); ctx.moveTo(512, 142); ctx.lineTo(497, 145); ctx.lineTo(505, 157); ctx.closePath(); ctx.fill();
+  poly([[460, 170], [KNOB.x, KNOB.y + KNOB.r]], FB, 1.5, [4, 4]);
+  const ang = (-135 + 270 * g.rf / 100) * Math.PI / 180;
+  ctx.fillStyle = "#fff"; ctx.strokeStyle = FB; ctx.lineWidth = 4; ctx.beginPath(); ctx.arc(KNOB.x, KNOB.y, KNOB.r, 0, TAU); ctx.fill(); ctx.stroke();
+  for (let k = 0; k <= 10; k++) { const aa = (-135 + 27 * k - 90) * Math.PI / 180; poly([[KNOB.x + 36 * Math.cos(aa), KNOB.y + 36 * Math.sin(aa)], [KNOB.x + 42 * Math.cos(aa), KNOB.y + 42 * Math.sin(aa)]], MUTED, 2); }
+  poly([[KNOB.x, KNOB.y], [KNOB.x + 24 * Math.sin(ang), KNOB.y - 24 * Math.cos(ang)]], FB, 5);
+  text("R_f = " + g.rf.toFixed(0) + " kΩ", 600, 104, 17, FB, "right", "bold");
+  text("drag the knob", 600, 128, 14, MUTED, "right");
+  // speaker
+  const sx = 690, sy = A.out[1], push = r.vout / VSAT * 7;
+  poly([[660, sy], [680, sy]]);
+  ctx.fillStyle = "#3a4256"; ctx.fillRect(sx - 10, sy - 16, 16, 32);
+  ctx.fillStyle = r.clipped ? BAD : "#5b6478"; ctx.beginPath(); ctx.moveTo(sx + 6, sy - 16); ctx.lineTo(sx + 30 + push, sy - 40); ctx.lineTo(sx + 30 + push, sy + 40); ctx.lineTo(sx + 6, sy + 16); ctx.closePath(); ctx.fill();
+  const loud = Math.min(1, Math.abs(r.vout) / VSAT);
+  for (let k = 1; k <= 3; k++) {
+    ctx.strokeStyle = (r.clipped ? BAD : COUT) + Math.round(40 + 200 * loud).toString(16).padStart(2, "0"); ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.arc(sx + 30, sy, 18 + k * 16 * (0.4 + loud), -0.6, 0.6); ctx.stroke();
+  }
+  if (r.clipped || g.amp * gain > VSAT) text("DISTORTION", sx + 20, sy + 70, 16, BAD, "center", "bold");
+  const db = 20 * Math.log10(gain);
+  readout([
+    { s: "Gain = 1 + R_f ÷ R_{in} = 1 + " + g.rf.toFixed(0) + " ÷ 10 = ×" + gain.toFixed(1) + "   (" + db.toFixed(1) + " dB)", weight: "bold", color: COUT },
+    { s: "V_{in} peak " + g.amp.toFixed(2) + " V, so V_{out} peak " + (g.amp * gain).toFixed(2) + " V" },
+    g.amp * gain > VSAT ? { s: "Too much gain: the tops are cut flat and the sound distorts. Turn it down.", color: BAD, weight: "bold", pill: true }
+      : { s: "Clean: the output is a bigger copy of the input", color: GOOD, weight: "bold", pill: true },
+    { s: "Every doubling of gain adds 6 dB. Real volume pots use a log taper so the ear hears even steps.", color: MUTED, size: 16 },
+  ]);
+  scope(790, 24, 580, 720, { title: "Scope", vdiv: 2, rails: true, traces: [
+    { f: tt => gainVals(tt).vin, color: CIN, label: "V_{in}" },
+    { f: tt => gainVals(tt).vout, color: COUT, label: "V_{out}", width: 3.5 }] });
+}
+let gainSlider = null;
+function s4Controls() {
+  gainSlider = addSlider("R_f (pot)", 0, 100, 1, AMP.gain.rf, v => (AMP.gain.rf = v), v => v + " kΩ");
+  for (const [lab, rf] of [["×1", 0], ["×2", 10], ["×5", 40], ["×10", 90]]) addBtn(lab, false, () => { AMP.gain.rf = rf; syncGain(); });
+  addSlider("V_in peak", 0.1, 1.5, 0.05, AMP.gain.amp, v => (AMP.gain.amp = v), v => v.toFixed(2) + " V");
+}
+function syncGain() { if (gainSlider) { gainSlider.input.value = AMP.gain.rf; gainSlider.out.textContent = AMP.gain.rf.toFixed(0) + " kΩ"; } }
+
+// ======================================================================
+// Scene 5: noise cancelling headphones
+// ======================================================================
+const N5 = { on: true, g: 1.0, delay: 0, music: false };
+const HUM = 0.75;    // on-screen hum frequency (Hz)
+const noise5 = tt => 1.1 * sin(TAU * HUM * tt) + 0.4 * sin(TAU * 3 * HUM * tt + 0.7);
+const music5 = tt => N5.music ? 0.8 * sin(TAU * 1.9 * tt) * (0.65 + 0.35 * sin(TAU * 0.23 * tt)) : 0;
+const dly5 = () => N5.delay / 10 / HUM;                  // delay in ms against a 100 Hz hum (10 ms period)
+const anti5 = tt => (N5.on ? -N5.g * noise5(tt - dly5()) : 0);
+const spk5 = tt => anti5(tt) - music5(tt);                // inverting summing amp: -(G mic + music)
+const ear5 = tt => noise5(tt) + spk5(tt);
+function residual5() {
+  let a = 0, b = 0;
+  for (let k = 0; k < 400; k++) { const tt = k / 400 / HUM * 3; const n = noise5(tt); const r = n + anti5(tt); a += n * n; b += r * r; }
+  return Math.sqrt(b / a);
+}
+function waves(x, y, r0, r1, amp, color, ang = 0.7) {
+  const sp = 60, off = (t * sp) % 30;
+  for (let rr = r0 + off; rr < r1; rr += 30) {
+    const fade = 1 - (rr - r0) / (r1 - r0);
+    ctx.strokeStyle = color; ctx.globalAlpha = Math.max(0, fade) * Math.min(1, amp); ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.arc(x, y, rr, -ang, ang); ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+}
+function s5Draw() {
+  header("Noise Cancelling Headphones", "A mic hears the noise, an inverting amplifier makes the opposite wave, the two add to almost nothing.");
+  // noise source
+  box(36, 210, 120, 120, "#eef1f6", "#c5ccd8");
+  text("Engine", 96, 250, 17, INK, "center", "bold"); text("noise", 96, 274, 17, INK, "center", "bold"); text("100 Hz hum", 96, 300, 13, MUTED, "center");
+  waves(150, 270, 10, 190, 1, "#7a8396");
+  // ear cup (cross section) and ear
+  ctx.fillStyle = "#3a4256"; roundRect(330, 120, 150, 300, 26); ctx.fill();
+  ctx.fillStyle = "#f6f7fb"; roundRect(350, 140, 140, 260, 18); ctx.fill();
+  ctx.fillStyle = "#e9d2bf"; ctx.beginPath(); ctx.ellipse(560, 270, 34, 62, 0, 0, TAU); ctx.fill();
+  ctx.strokeStyle = "#b88d70"; ctx.lineWidth = 3; ctx.beginPath(); ctx.ellipse(560, 270, 18, 38, 0, -1.2, 1.2); ctx.stroke();
+  text("Ear", 560, 352, 16, INK, "center", "bold");
+  // mic on the outside
+  ctx.fillStyle = INK; ctx.beginPath(); ctx.arc(318, 170, 11, 0, TAU); ctx.fill(); text("Mic", 300, 142, 15, INK, "center", "bold");
+  // speaker inside
+  ctx.fillStyle = "#3a4256"; ctx.fillRect(398, 248, 14, 44);
+  ctx.fillStyle = "#5b6478"; ctx.beginPath(); ctx.moveTo(412, 248); ctx.lineTo(440 + spk5(t) * 3, 228); ctx.lineTo(440 + spk5(t) * 3, 312); ctx.lineTo(412, 292); ctx.closePath(); ctx.fill();
+  text("Speaker", 420, 334, 14, MUTED, "center", "bold");
+  if (N5.on || N5.music) waves(446, 270, 6, 110, Math.min(1, Math.abs(spk5(t)) + 0.3), COUT, 0.6);
+  const res = Math.abs(ear5(t) + music5(t));
+  ctx.fillStyle = (residual5() < 0.2 ? GOOD : BAD) + "30"; ctx.beginPath(); ctx.arc(530, 270, 18 + 30 * Math.min(1, res), 0, TAU); ctx.fill();
+  // amplifier below the cup
+  const A = opamp(430, 520, { w: 90, h: 96, name: "", noSupply: true });
+  const nX = 340, nY = A.minus[1];
+  poly([[318, 181], [318, 300], [250, 300], [250, nY], [258, nY]]); zigH(258, 322, nY); poly([[322, nY], A.minus]); dot(nX, nY);
+  text("R_{in}", 290, nY + 28, 15, INK, "center", "bold");
+  poly([[nX, nY], [nX, 455], [395, 455]]); zigH(395, 455, 455, FB); poly([[455, 455], [505, 455], [505, A.out[1]]]);
+  text("R_f (gain)", 332, 452, 14, FB, "right", "bold");
+  poly([A.plus, [370, A.plus[1]], [370, A.plus[1] + 10]]); ground(370, A.plus[1] + 10);
+  poly([A.out, [540, A.out[1]], [540, 440], [405, 440], [405, 292]]); dot(505, A.out[1]);
+  text("inverting", 430, 586, 14, MUTED, "center", "bold");
+  if (N5.music) {
+    poly([[nX, nY], [nX, 580]]); zigV(nX, 580, 620, CIN); poly([[nX, 620], [nX, 640], [280, 640]]);
+    text("Music in", 270, 640, 15, CIN, "right", "bold");
+  }
+  const red = residual5(), db = 20 * Math.log10(Math.max(red, 1e-4));
+  readout([
+    { s: N5.on ? "Speaker output = −G × mic" + (N5.music ? " − music" : "") + ":  G = " + N5.g.toFixed(2) + ",  delay " + N5.delay.toFixed(1) + " ms" : "Noise cancelling OFF", weight: "bold", color: COUT },
+    { s: "Noise at the ear: " + (red * 100).toFixed(0) + " % of the outside noise  (" + db.toFixed(1) + " dB)" },
+    !N5.on ? { s: "You hear all of the engine noise", color: BAD, weight: "bold", pill: true }
+      : red < 0.15 ? { s: "The anti-noise is equal and opposite: the waves cancel", color: GOOD, weight: "bold", pill: true }
+        : { s: N5.delay > 0.2 ? "Too slow: the anti-noise arrives late, so the peaks no longer line up" : "Gain not matched: the anti-noise is the wrong size", color: BAD, weight: "bold", pill: true },
+    { s: "Same idea as the summing amplifier: music is added, noise is subtracted.", color: MUTED, size: 16 },
+  ].map(L => Object.assign({ size: 16, gap: 36 }, L)), 790, 552, 580, 192);
+  // scopes
+  scope(790, 24, 580, 170, { title: "1  Noise outside (at the mic)", vdiv: 1, traces: [{ f: noise5, color: "#7a8396" }] });
+  scope(790, 200, 580, 170, { title: "2  Speaker output (anti-noise)", vdiv: 1, traces: [{ f: spk5, color: COUT }] });
+  scope(790, 376, 580, 170, { title: "3  What the ear hears", vdiv: 1, traces: [
+    { f: noise5, color: "#7a839644", width: 2 }, { f: ear5, color: N5.on ? GOOD : BAD, width: 3.5 }] });
+}
+function s5Controls() {
+  addBtn("Noise cancelling ON", N5.on, b => { N5.on = !N5.on; b.classList.toggle("on", N5.on); });
+  addSlider("Gain G", 0, 1.5, 0.01, N5.g, v => (N5.g = v), v => v.toFixed(2));
+  addSlider("Delay", 0, 3, 0.1, N5.delay, v => (N5.delay = v), v => v.toFixed(1) + " ms");
+  addBtn("Add music", N5.music, b => { N5.music = !N5.music; b.classList.toggle("on", N5.music); });
+}
+
+// ======================================================================
+// Scene 6: differential amplifier on a long noisy cable
+// ======================================================================
+const D6 = { noise: 2.0, mis: 0, single: false };
+const sig6 = tt => 0.9 * sin(TAU * 1.0 * tt);
+const hum6 = tt => D6.noise * (0.8 * sin(TAU * 0.3 * tt) + 0.25 * sin(TAU * 0.9 * tt + 1));
+const vA6 = tt => hum6(tt);                  // reference wire: noise only, to V-
+const vB6 = tt => sig6(tt) + hum6(tt);       // signal wire: signal + noise, to V+
+function out6(tt) {
+  if (D6.single) return clip(vB6(tt));
+  const r4 = 10 * (1 + D6.mis / 100);
+  return clip(vB6(tt) * (r4 / (10 + r4)) * 2 - vA6(tt));
+}
+function s6Draw() {
+  header("Differential Amplifier on a Noisy Cable", "Noise lands equally on both wires. The amplifier takes the difference, so the noise cancels.");
+  const A = opamp(580, 300);
+  const yA = A.minus[1], yB = A.plus[1];
+  // sensor and long cable
+  box(30, 230, 100, 130, "#eef1f6", "#c5ccd8"); text("Sensor", 80, 262, 16, INK, "center", "bold"); generator(80, 312, 22, CIN);
+  poly([[130, yA - 10], [380, yA - 10], [380, yA], [400, yA]], D6.single ? OFFC : WIRE); poly([[130, yB + 10], [380, yB + 10], [380, yB], [400, yB]]);
+  text("wire 1: signal + noise", 250, yB + 30, 14, MUTED, "left", "bold");
+  text("wire 2: 0 V ref + noise", 250, yA + 12, 14, MUTED, "left", "bold");
+  // mains cable inducing noise
+  poly([[150, 130], [370, 130]], "#9a6b00", 10);
+  text("Mains cable 50 Hz", 260, 104, 15, "#9a6b00", "center", "bold");
+  for (const x of [165, 215]) {
+    const n = Math.abs(hum6(t)) / Math.max(0.01, D6.noise) * (D6.noise > 0 ? 1 : 0);
+    poly([[x, 142], [x - 10, 175], [x + 6, 175], [x - 4, yA - 18]], "#e0a000", 2.5);
+    ctx.globalAlpha = 0.3 + 0.7 * n; poly([[x + 30, 142], [x + 20, 175], [x + 36, 175], [x + 26, yB]], "#e0a000", 2.5); ctx.globalAlpha = 1;
+  }
+  // resistors
+  zigH(400, 480, yA, D6.single ? OFFC : WIRE); poly([[480, yA], [500, yA]], D6.single ? OFFC : WIRE); poly([[500, yA], A.minus]); dot(500, yA);
+  zigH(400, 480, yB); poly([[480, yB], A.plus]); dot(500, yB);
+  text(D6.single ? "R_1 not connected" : "R_1 10 kΩ", 440, yA - 26, 15, D6.single ? MUTED : INK, "center", "bold"); text("R_3 10 kΩ", 440, yB + 30, 15, INK, "center", "bold");
+  poly([[500, yA], [500, 190], [540, 190]]); zigH(540, 620, 190); poly([[620, 190], [680, 190], [680, A.out[1]]]); dot(680, A.out[1]);
+  text("R_f 10 kΩ", 580, 162, 15, INK, "center", "bold");
+  poly([[500, yB], [500, 380]]); zigV(500, 380, 450, D6.mis ? BAD : WIRE); poly([[500, 450], [500, 466]]); ground(500, 466);
+  text("R_4 " + (10 * (1 + D6.mis / 100)).toFixed(1) + " kΩ", 516, 418, 15, D6.mis ? BAD : INK, "left", "bold");
+  poly([A.out, [730, A.out[1]]]); terminal(736, A.out[1]); text("V_{out}", 700, A.out[1] - 28, 17, COUT, "center", "bold");
+  // numbers
+  const r4 = 10 * (1 + D6.mis / 100), cm = D6.single ? 1 : Math.abs(2 * r4 / (10 + r4) - 1);
+  const cmrr = cm > 1e-6 ? 20 * Math.log10(1 / cm) : Infinity;
+  readout([
+    { s: D6.single ? "One wire only: V_{out} = wire 1 = signal + noise" : "V_{out} = (R_f ÷ R_1) × (V_{+} − V_{−}) = wire 1 − wire 2 = signal", weight: "bold", color: COUT },
+    { s: "Noise left at the output: " + (cm * 100).toFixed(1) + " %" + (D6.single ? "" : "   (common mode rejection " + (cmrr === Infinity ? "perfect" : cmrr.toFixed(0) + " dB") + ")") },
+    D6.single ? { s: "No cancelling: the hum is as big as the signal", color: BAD, weight: "bold", pill: true }
+      : cm < 0.02 ? { s: "Same noise on both inputs: it cancels, the signal stays", color: GOOD, weight: "bold", pill: true }
+        : { s: "Resistors not matched: some noise gets through. Use 1 % resistors.", color: BAD, weight: "bold", pill: true },
+    { s: "Used in microphone cables (balanced XLR), aircraft sensors, ECG machines.", color: MUTED, size: 16 },
+  ]);
+  scope(790, 24, 580, 240, { title: "Wire 1 (to V_{+}): signal + noise", vdiv: 1, traces: [{ f: vB6, color: CIN }] });
+  scope(790, 270, 580, 230, { title: "Wire 2 (to V_{−}): noise only", vdiv: 1, traces: [{ f: vA6, color: "#7a8396" }] });
+  scope(790, 506, 580, 238, { title: "Amplifier output", vdiv: 1, traces: [
+    { f: sig6, color: CIN + "55", width: 2, dash: [6, 5] }, { f: out6, color: COUT, width: 3.5 }] });
+}
+function s6Controls() {
+  addSlider("Noise", 0, 3, 0.1, D6.noise, v => (D6.noise = v), v => v.toFixed(1) + " V");
+  addSlider("R_4 mismatch", 0, 20, 1, D6.mis, v => (D6.mis = v), v => v + " %");
+  addBtn("One wire only (no differential)", D6.single, b => { D6.single = !D6.single; b.classList.toggle("warn", D6.single); });
+}
+
+// ======================================================================
+// Controls (HTML bar)
+// ======================================================================
+const tabs = document.getElementById("tabs"), ctl = document.getElementById("ctl");
+const DRAW = [s1Draw, s2Draw, s3Draw, s4Draw, s5Draw, s6Draw];
+const CTRL = [s1Controls, s2Controls, s3Controls, s4Controls, s5Controls, s6Controls];
+function html(s) { return s.replace(/_\{([^}]*)\}/g, "<sub>$1</sub>").replace(/_([a-z0-9]+)/g, "<sub>$1</sub>"); }
+function addBtn(label, on, fn) {
+  const b = document.createElement("button"); b.innerHTML = html(label); if (on) b.classList.add("on");
+  b.addEventListener("click", () => fn(b)); ctl.appendChild(b); return b;
+}
+function addSlider(label, min, max, step, value, fn, fmt) {
+  const l = document.createElement("label"); l.innerHTML = html(label);
+  const i = document.createElement("input"); i.type = "range"; i.min = min; i.max = max; i.step = step; i.value = value;
+  const o = document.createElement("span"); o.className = "val"; o.textContent = fmt(+value);
+  i.addEventListener("input", () => { fn(+i.value); o.textContent = fmt(+i.value); });
+  ctl.append(l, i, o); return { input: i, out: o };
+}
+function addList(label, list, value, fn, fmt) {     // slider over a list of standard values
+  let idx = Math.max(0, list.indexOf(value));
+  return addSlider(label, 0, list.length - 1, 1, idx, k => fn(list[k]), k => fmt(list[k]));
+}
+function setScene(k) {
+  scene = k;
+  tabs.innerHTML = "";
+  SCENES.forEach((s, i) => { const b = document.createElement("button"); b.textContent = s.name; if (i === k) b.classList.add("on"); b.addEventListener("click", () => setScene(i)); tabs.appendChild(b); });
+  const sp = document.createElement("span"); sp.className = "sp"; tabs.appendChild(sp);
+  const pb = document.createElement("button"); pb.textContent = paused ? "Play (Space)" : "Pause (Space)"; pb.id = "pause";
+  pb.addEventListener("click", togglePause); tabs.appendChild(pb);
+  const ks = document.createElement("span"); ks.className = "keys"; ks.textContent = "1 to 6: scenes   F: fullscreen"; tabs.appendChild(ks);
+  ctl.innerHTML = ""; gainSlider = null; CTRL[k]();
+}
+function togglePause() { paused = !paused; const b = document.getElementById("pause"); if (b) b.textContent = paused ? "Play (Space)" : "Pause (Space)"; }
+window.addEventListener("keydown", e => {
+  if (e.key >= "1" && e.key <= "6") setScene(+e.key - 1);
+  else if (e.key === " ") { e.preventDefault(); togglePause(); }
+  else if (e.key === "f" || e.key === "F") { if (document.fullscreenElement) document.exitFullscreen(); else document.documentElement.requestFullscreen(); }
+});
+// knob drag (scene 4)
+function canvasXY(e) { const r = cv.getBoundingClientRect(); return [(e.clientX - r.left) * W / r.width, (e.clientY - r.top) * H / r.height]; }
+cv.addEventListener("pointerdown", e => {
+  if (scene !== 3) return; const [x, y] = canvasXY(e);
+  if (Math.hypot(x - KNOB.x, y - KNOB.y) < KNOB.r + 14) { dragKnob = true; cv.setPointerCapture(e.pointerId); knobTo(x, y); }
+});
+cv.addEventListener("pointermove", e => { if (dragKnob) { const [x, y] = canvasXY(e); knobTo(x, y); } });
+cv.addEventListener("pointerup", () => { dragKnob = false; });
+function knobTo(x, y) {
+  let a = Math.atan2(x - KNOB.x, -(y - KNOB.y)) * 180 / Math.PI;     // 0 = straight up
+  a = Math.max(-135, Math.min(135, a));
+  AMP.gain.rf = Math.round((a + 135) / 270 * 100); syncGain();
+}
+
+// ======================================================================
+// Main loop
+// ======================================================================
+let last = performance.now();
+function frame(now) {
+  const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  lastDt = paused ? 0 : dt;
+  if (!paused) t += dt;
+  if (scene === 0 && !paused) s1Update(dt);
+  ctx.fillStyle = "#f6f7fb"; ctx.fillRect(0, 0, W, H);
+  DRAW[scene]();
+  requestAnimationFrame(frame);
+}
+setScene(0); fit(); requestAnimationFrame(frame);
+</script>
+</body>
+</html>
