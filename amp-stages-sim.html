@@ -33,24 +33,23 @@
 <script>
 "use strict";
 // ======================================================================
-// Model: mic (mV) -> optional pre-amp x200 -> noise joins -> power amp x10 -> speaker
+// Model: mic (mV) -> optional pre-amp x200 -> power amp -> speaker
 // ======================================================================
 const FS = 0.6;                       // on-screen signal frequency (slowed down)
-const NZ = 0.003;                     // cable pickup + hum + power amp input noise, 3 mV
 const RAIL = 12;                      // power amp output limit (V)
 const MODES = [
   { name: "1  Mic straight to power amp", pre: 1, pa: 10 },
-  { name: "2  Power amp turned up", pre: 1, pa: 2000 },
+  { name: "2  Power amp at full gain", pre: 1, pa: 30 },
   { name: "3  Pre-amp, then power amp", pre: 200, pa: 10 },
 ];
 const S = { mode: 0, mic: 0.005 };    // mic output peak (V)
 const sin = Math.sin, TAU = 2 * Math.PI;
 const clip = v => Math.max(-RAIL, Math.min(RAIL, v));
-const ns = tt => 0.45 * sin(TAU * 9.3 * tt) + 0.3 * sin(TAU * 15.7 * tt + 1) + 0.25 * sin(TAU * 23.9 * tt + 2) + 0.2 * sin(TAU * 6.1 * tt + 0.4);
 const M = () => MODES[S.mode];
 const micV = tt => S.mic * sin(TAU * FS * tt);
-const paIn = tt => M().pre * micV(tt) + NZ * ns(tt);
+const paIn = tt => M().pre * micV(tt);
 const outV = tt => clip(M().pa * paIn(tt));
+const lvl = () => { const m = M(), pre = m.pre * S.mic; return { mic: S.mic, pre, out: Math.min(m.pa * pre, RAIL), want: m.pa * pre }; };
 
 // ======================================================================
 // Canvas + drawing helpers
@@ -66,7 +65,7 @@ function fit() {
 window.addEventListener("resize", fit);
 
 const INK = "#1a2233", MUTED = "#5b6478", GRID = "#e1e5ec", WIRE = "#4a5468", OFFC = "#b8bfcc";
-const CIN = "#e07a00", COUT = "#1f6fd6", GOOD = "#18a058", BAD = "#d93636", ZAP = "#e0a000";
+const CIN = "#e07a00", COUT = "#1f6fd6", GOOD = "#18a058", BAD = "#d93636";
 
 function font(size, weight) { return `${weight} ${size}px Segoe UI, Arial`; }
 function parseRich(str) {
@@ -164,15 +163,15 @@ function scope(x, y, w, h, o) {
 }
 
 // ======================================================================
-// Layout: chain on top, level diagram in the middle, scopes at the bottom
+// Layout: chain on top, signal funnel in the middle, scopes at the bottom
 // ======================================================================
 const CY = 175;                                   // signal line height
-const X = { mic: 180, preIn: 345, preOut: 475, zap: 590, paIn: 695, paOut: 865, spk: 990 };
-const LV = { top: 318, bot: 508, lo: -4, hi: Math.log10(30) };   // level diagram, log scale 0.1 mV to 30 V
-const yOf = v => LV.bot - (Math.log10(Math.max(v, 1e-4)) - LV.lo) / (LV.hi - LV.lo) * (LV.bot - LV.top);
+const X = { mic: 180, preIn: 345, preOut: 475, paIn: 655, paOut: 865, spk: 990 };
+const Y0 = 412, HMAX = 92;                        // funnel strip centre line and largest half height
+const px = v => HMAX * Math.pow(Math.min(Math.abs(v), RAIL) / RAIL, 0.45);   // size on screen (compressed scale)
 
 function drawChain() {
-  const m = M(), pre = m.pre > 1;
+  const m = M(), pre = m.pre > 1, L = lvl();
   // voice into the mic
   text("Voice", 58, CY - 62, 16, MUTED, "center", "bold");
   waves(40, CY, 8, 92, 0.35 + S.mic / 0.02, CIN, 0.55);
@@ -191,20 +190,12 @@ function drawChain() {
   text("×200", P.in + 44, CY, 20, pre ? INK : OFFC, "center", "bold");
   text("Pre-amp", (X.preIn + X.preOut) / 2, CY + 86, 18, pre ? INK : OFFC, "center", "bold");
   text(pre ? "small signal" : "not used", (X.preIn + X.preOut) / 2, CY + 110, 15, pre ? MUTED : OFFC, "center");
-  // noise joining the line before the power amp
-  const fl = 0.35 + 0.65 * Math.abs(ns(t)) / 1.2;
-  ctx.globalAlpha = fl;
-  poly([[X.zap - 14, 78], [X.zap + 6, 112], [X.zap - 8, 112], [X.zap + 4, CY - 12]], ZAP, 4);
-  ctx.globalAlpha = 1;
-  dot(X.zap + 4, CY, 5, ZAP);
-  text("hum and pickup", X.zap - 4, 62, 15, "#9a6b00", "center", "bold");
-  text(fmtV(NZ), X.zap + 30, 104, 15, "#9a6b00", "left", "bold");
   // power amp with heatsink fins
   const PA = amp((X.paIn + X.paOut) / 2, CY, X.paOut - X.paIn, 170, { fill: "#f8d0d0" });
   ctx.fillStyle = "#8a93a6";
-  for (let k = 0; k < 6; k++) ctx.fillRect(X.paIn + 8 + k * 14, CY - 112 - (k % 2) * 6, 8, 26 + (k % 2) * 6);
+  for (let k = 0; k < 7; k++) ctx.fillRect(X.paIn + 8 + k * 14, CY - 112 - (k % 2) * 6, 8, 26 + (k % 2) * 6);
   const turned = m.pa > 10;
-  text("×" + m.pa, PA.in + 62, CY, 22, turned ? BAD : INK, "center", "bold");
+  text("×" + m.pa + (turned ? " max" : ""), PA.in + 70, CY, 22, turned ? BAD : INK, "center", "bold");
   text("Power amp", (X.paIn + X.paOut) / 2, CY + 110, 18, INK, "center", "bold");
   text("needs about 1 V in", (X.paIn + X.paOut) / 2, CY + 134, 15, MUTED, "center");
   // speaker
@@ -213,90 +204,86 @@ function drawChain() {
   ctx.fillStyle = "#3a4256"; ctx.fillRect(X.spk - 30, CY - 24, 22, 48);
   ctx.fillStyle = "#5b6478"; ctx.beginPath(); ctx.moveTo(X.spk - 8, CY - 24); ctx.lineTo(X.spk + 34 + d, CY - 62); ctx.lineTo(X.spk + 34 + d, CY + 62); ctx.lineTo(X.spk - 8, CY + 24); ctx.closePath(); ctx.fill();
   text("Speaker 8 Ω", X.spk + 4, CY + 92, 17, INK, "center", "bold");
-  const sOut = Math.min(m.pa * m.pre * S.mic, RAIL), nOut = Math.min(m.pa * NZ, RAIL);
-  waves(X.spk + 40, CY, 10, 200, sOut / 6, COUT, 0.62);
-  waves(X.spk + 52, CY, 10, 190, nOut / 4, BAD, 0.55, 5);
+  waves(X.spk + 40, CY, 10, 200, L.out / 6, COUT, 0.62);
 }
 
-function levelPath(pts) { poly(pts.map(p => [p[0], yOf(p[1])]), pts.color, pts.w); }
-function drawLevels() {
-  const m = M(), sMic = S.mic, sPre = m.pre * S.mic, sOut = Math.min(m.pa * sPre, RAIL), nOut = Math.min(m.pa * NZ, RAIL);
+// funnel: a horn from half height h0 to h1 between x0 and x1
+function funnel(x0, x1, h0, h1, fill, stroke, ghost) {
+  const top = u => Y0 - (h0 + (h1 - h0) * u * u);          // flared horn
+  ctx.beginPath(); ctx.moveTo(x0, Y0 - h0);
+  for (let k = 1; k <= 30; k++) { const u = k / 30; ctx.lineTo(x0 + (x1 - x0) * u, top(u)); }
+  for (let k = 30; k >= 0; k--) { const u = k / 30; ctx.lineTo(x0 + (x1 - x0) * u, 2 * Y0 - top(u)); }
+  ctx.closePath();
+  ctx.fillStyle = ghost ? "rgba(255,255,255,0)" : fill; ctx.fill();
+  ctx.strokeStyle = ghost ? OFFC : stroke; ctx.lineWidth = 4; ctx.setLineDash(ghost ? [8, 7] : []);
+  ctx.beginPath(); ctx.moveTo(x0, Y0 - h0); for (let k = 1; k <= 30; k++) { const u = k / 30; ctx.lineTo(x0 + (x1 - x0) * u, top(u)); } ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(x0, Y0 + h0); for (let k = 1; k <= 30; k++) { const u = k / 30; ctx.lineTo(x0 + (x1 - x0) * u, 2 * Y0 - top(u)); } ctx.stroke();
+  ctx.setLineDash([]);
+}
+function bracket(x, h, color, label) {
+  poly([[x, Y0 - h], [x, Y0 + h]], color, 3);
+  poly([[x - 7, Y0 - h], [x + 7, Y0 - h]], color, 3); poly([[x - 7, Y0 + h], [x + 7, Y0 + h]], color, 3);
+  if (label) text(label, x + 10, Y0 + h + 15, 14, color, "right", "bold");
+}
+function drawFunnels() {
+  const m = M(), pre = m.pre > 1, L = lvl();
   box(30, 296, 1010, 228);
-  text("Level", 50, 318, 17, INK, "left", "bold");
-  // grid and scale
-  const marks = [[1e-4, "0.1 mV"], [1e-3, "1 mV"], [1e-2, "10 mV"], [0.1, "0.1 V"], [1, "1 V"], [10, "10 V"]];
-  for (const [v, l] of marks) { poly([[X.mic - 40, yOf(v)], [1020, yOf(v)]], GRID, 1); text(l, X.mic - 48, yOf(v), 13, MUTED, "right"); }
-  // power amp input window
-  ctx.fillStyle = GOOD + "22"; ctx.fillRect(X.zap, yOf(2), X.paIn - X.zap, yOf(0.5) - yOf(2));
-  text("power amp", X.zap + 52, yOf(0.5) + 12, 13, GOOD, "center", "bold");
-  text("range", X.zap + 52, yOf(0.5) + 28, 13, GOOD, "center", "bold");
-  // clipping limit
-  poly([[X.paOut, yOf(RAIL)], [1020, yOf(RAIL)]], BAD + "aa", 2, [7, 5]);
-  text("clips", X.paOut + 6, yOf(RAIL) - 11, 13, BAD, "left", "bold");
-  // stage markers
-  for (const [x0, x1, c] of [[X.preIn, X.preOut, m.pre > 1 ? "#ffe2c855" : null], [X.paIn, X.paOut, "#f8d0d055"]]) {
-    if (!c) continue; ctx.fillStyle = c; ctx.fillRect(x0, LV.top - 8, x1 - x0, LV.bot - LV.top + 16);
-  }
-  // noise and signal lines
-  const N = [[X.zap, NZ], [X.paIn, NZ], [X.paOut, nOut], [X.spk + 20, nOut]];
-  const Sg = [[X.mic, sMic], [X.preIn, sMic], [X.preOut, sPre], [X.paIn, sPre], [X.paOut, sOut], [X.spk + 20, sOut]];
-  poly(N.map(p => [p[0], yOf(p[1])]), BAD, 4);
-  poly(Sg.map(p => [p[0], yOf(p[1])]), COUT, 5);
-  // a pulse travelling along each line
-  const ph = (t * 0.35) % 1;
-  for (const [pts, c] of [[Sg, COUT], [N, BAD]]) {
-    const L = pts.length - 1, f = ph * L, k = Math.min(L - 1, Math.floor(f)), u = f - k;
-    const a = pts[k], b = pts[k + 1], lx = a[0] + (b[0] - a[0]) * u;
-    const ly = Math.pow(10, Math.log10(a[1]) + (Math.log10(b[1]) - Math.log10(a[1])) * u);
-    if (c === BAD && lx < X.zap) continue;
-    dot(lx, yOf(ly), 7, c);
-  }
-  // values
-  text(fmtV(sMic), X.mic + 8, yOf(sMic) - 14, 15, COUT, "left", "bold");
-  text(fmtV(sPre), X.paIn - 6, yOf(sPre) - 14, 15, COUT, "right", "bold");
-  text(fmtV(NZ), X.paIn - 6, yOf(NZ) + 15, 15, BAD, "right", "bold");
-  text(fmtV(sOut), X.spk + 24, yOf(sOut) - 14, 15, COUT, "right", "bold");
-  text(fmtV(nOut), X.spk + 24, yOf(nOut) + 15, 15, BAD, "right", "bold");
-  // gap between signal and noise at the speaker
-  const gx = X.spk + 34, ok = sOut / nOut >= 10;
-  poly([[gx, yOf(sOut) + 4], [gx, yOf(nOut) - 4]], ok ? GOOD : BAD, 3);
-  poly([[gx - 6, yOf(sOut) + 4], [gx + 6, yOf(sOut) + 4]], ok ? GOOD : BAD, 3);
-  poly([[gx - 6, yOf(nOut) - 4], [gx + 6, yOf(nOut) - 4]], ok ? GOOD : BAD, 3);
-  // legend
-  poly([[120, 318], [146, 318]], COUT, 5); text("signal", 152, 318, 15, INK, "left", "bold");
-  poly([[215, 318], [241, 318]], BAD, 4); text("noise", 247, 318, 15, INK, "left", "bold");
+  text("Signal size", 50, 318, 17, INK, "left", "bold");
+  // each amplifier is a funnel made for one input size and one output size
+  funnel(X.preIn, X.preOut, px(0.005) + 6, px(1) + 6, "#ffe2c8aa", CIN, !pre);
+  funnel(X.paIn, X.paOut, px(1) + 6, px(10) + 6, "#f8d0d0aa", BAD, false);
+  // the wave and its size along the chain
+  const A = x => {
+    if (x < X.preIn) return px(L.mic);
+    if (x < X.preOut) { const u = (x - X.preIn) / (X.preOut - X.preIn); return pre ? px(L.mic) + (px(L.pre) - px(L.mic)) * u * u : px(L.mic); }
+    if (x < X.paIn) return px(L.pre);
+    if (x < X.paOut) { const u = (x - X.paIn) / (X.paOut - X.paIn); return px(L.pre) + (px(L.out) - px(L.pre)) * u * u; }
+    return px(L.out);
+  };
+  const x0 = X.mic - 20, x1 = X.spk + 10, lam = 46, ph = TAU * FS * 2 * t;
+  ctx.fillStyle = COUT + "1c"; ctx.beginPath(); ctx.moveTo(x0, Y0 - A(x0));
+  for (let x = x0; x <= x1; x += 3) ctx.lineTo(x, Y0 - A(x));
+  for (let x = x1; x >= x0; x -= 3) ctx.lineTo(x, Y0 + A(x));
+  ctx.closePath(); ctx.fill();
+  ctx.strokeStyle = COUT; ctx.lineWidth = 3; ctx.beginPath();
+  for (let x = x0; x <= x1; x += 2) { const y = Y0 - A(x) * sin(TAU * x / lam - ph); x === x0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y); }
+  ctx.stroke();
+  // what each stage is made for
+  text("made for 1 V in", X.paIn - 8, Y0 - px(1) - 12, 14, BAD, "right", "bold");
+  if (pre) text("made for mV in", X.preIn - 8, Y0 + 24, 14, CIN, "right", "bold");
+  bracket(X.spk + 24, px(10), GOOD, "full volume");
+  // sizes
+  text(fmtV(L.mic), X.mic, Y0 - px(L.mic) - 16, 15, COUT, "left", "bold");
+  text(fmtV(L.pre), (X.preOut + X.paIn) / 2, Y0 + px(L.pre) + 18, 15, COUT, "center", "bold");
+  text(fmtV(L.out), X.spk - 30, Y0 - px(L.out) - 16, 15, COUT, "right", "bold");
+  if (L.pre < 0.3) text("too small to fill it", (X.paIn + X.paOut) / 2 + 20, Y0 + 24, 15, BAD, "center", "bold");
 }
 
 function drawReadout() {
-  const m = M(), sPre = m.pre * S.mic, sOut = m.pa * sPre, nOut = m.pa * NZ, ratio = sPre / NZ;
+  const m = M(), L = lvl();
   box(1056, 296, 314, 228);
-  text("At the power amp input", 1074, 322, 15, MUTED, "left", "bold");
-  text("signal " + fmtV(sPre), 1074, 350, 20, COUT, "left", "bold");
-  text("noise " + fmtV(NZ), 1074, 378, 20, BAD, "left", "bold");
-  text("signal ÷ noise = " + (ratio >= 10 ? ratio.toFixed(0) : ratio.toFixed(1)), 1074, 410, 18, INK, "left", "bold");
+  text("Mic gives " + fmtV(L.mic), 1074, 326, 19, INK, "left", "bold");
+  text("Power amp wants about 1 V", 1074, 358, 17, MUTED, "left", "bold");
+  text("Power amp gets " + fmtV(L.pre), 1074, 390, 19, L.pre < 0.3 ? BAD : GOOD, "left", "bold");
   let s, c;
-  if (sOut > RAIL) { s = "CLIPPING"; c = BAD; }
-  else if (ratio < 10) { s = sOut < 2 ? "TOO WEAK, LOST IN NOISE" : "LOUD BUT NOISY"; c = BAD; }
-  else if (sOut < 2) { s = "CLEAN BUT TOO QUIET"; c = CIN; }
-  else { s = "LOUD AND CLEAN"; c = GOOD; }
-  roundRect(1070, 438, 286, 40, 8); ctx.fillStyle = c + "18"; ctx.fill();
-  text(s, 1084, 459, 19, c, "left", "bold");
-  text("speaker " + fmtV(Math.min(sOut, RAIL)), 1074, 500, 16, MUTED, "left", "bold");
+  if (L.want > RAIL) { s = "CLIPPING"; c = BAD; }
+  else if (L.pre < 0.3) { s = m.pa > 10 ? "STILL TOO SMALL" : "TOO SMALL"; c = BAD; }
+  else { s = "FITS: FULL VOLUME"; c = GOOD; }
+  roundRect(1070, 418, 286, 40, 8); ctx.fillStyle = c + "18"; ctx.fill();
+  text(s, 1084, 439, 19, c, "left", "bold");
+  text("speaker " + fmtV(L.out), 1074, 488, 19, COUT, "left", "bold");
 }
 
 function draw() {
   text("Amplifier Stages", 40, 30, 28, INK, "left", "bold");
   drawChain();
-  drawLevels();
+  drawFunnels();
   drawReadout();
+  const L = lvl(), small = L.pre < 0.3;
   scope(30, 534, 440, 218, { title: "Mic output", f: tt => micV(tt) * 1000, vdiv: 2, unit: "2 mV/div", color: CIN });
-  const sPre = M().pre * S.mic;
-  if (sPre < 0.1)       // zoomed in: the signal is the same size as the noise
-    scope(480, 534, 440, 218, { title: "Power amp input (zoomed in)", f: tt => paIn(tt) * 1000, vdiv: 2, unit: "2 mV/div", color: COUT,
-      note: "needs about ±1 V: " + Math.round(1 / sPre) + " times bigger", noteColor: BAD });
-  else
-    scope(480, 534, 440, 218, { title: "Power amp input", f: paIn, vdiv: 0.5, unit: "0.5 V/div", color: COUT,
-      marks: [{ v: 1, c: GOOD }, { v: -1, c: GOOD }], note: "needs about ±1 V", noteColor: GOOD });
+  scope(480, 534, 440, 218, { title: "Power amp input", f: paIn, vdiv: 0.5, unit: "0.5 V/div", color: COUT,
+    marks: [{ v: 1, c: GOOD }, { v: -1, c: GOOD }],
+    note: small ? "needs about ±1 V: " + Math.round(1 / L.pre) + " times bigger" : "needs about ±1 V", noteColor: small ? BAD : GOOD });
   scope(930, 534, 440, 218, { title: "Speaker", f: outV, vdiv: 5, unit: "5 V/div", color: COUT,
     marks: [{ v: RAIL, c: BAD + "aa" }, { v: -RAIL, c: BAD + "aa" }] });
 }

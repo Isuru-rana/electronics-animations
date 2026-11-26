@@ -11,7 +11,7 @@ Live: https://isuru-rana.github.io/electronics-animations/
 | `bridge-sim.html` | Bridge rectifier: diode pairs per half cycle, input and output graphs, open D3 fault |
 | `transistor-tap-sim.html` | NPN transistor next to a water tap: cut-off, active, saturation |
 | `zener-regulator-sim.html` | Zener regulator: V_in sweep, loads, current split, Zener reverse characteristic with live operating point, worksheet table; backwards and burn-out faults |
-| `amp-stages-sim.html` | Amplifier stages: mic straight to a power amp, power amp turned up, pre-amp first; level diagram, signal and noise |
+| `amp-stages-sim.html` | Amplifier stages: mic straight to a power amp, power amp at full gain, pre-amp first; signal size shown as funnels |
 | `opamp-sim.html` | Op-amp: open and closed loop, inverting, non inverting, gain control, noise cancelling headphones, differential amplifier |
 | `diode-meter-sim.html` | Diode knee voltage circuit; how a voltmeter reads the difference between red and COM |
 
