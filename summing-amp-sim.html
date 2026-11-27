@@ -41,7 +41,7 @@ const VHI = 7.5, VLO = -8.9, FV = 0.4;
 const sin = Math.sin, TAU = 2 * Math.PI;
 const clipO = v => Math.max(VLO, Math.min(VHI, v));
 const MODES = ["1  Two DC inputs", "2  Sine + DC (Activity 8)", "3  Mixer: two sines"];
-const S = { mode: 1, a: 1.0, b: 2.0, rf: 10 };          // a, b: V1 and V2 setting (DC level or sine peak)
+const S = { mode: 1, a: 2.0, b: 2.0, rf: 10 };          // a, b: V1 and V2 setting (DC level or sine peak)
 const R1 = 10, R2 = 10;                                  // kOhm
 const V1 = tt => S.mode === 0 ? S.a : S.a * sin(TAU * FV * tt);
 const V2 = tt => S.mode === 2 ? S.b * sin(TAU * FV * 2.7 * tt + 0.6) : S.b;
@@ -281,43 +281,17 @@ function drawCircuit() {
   text("I_f = I_1 + I_2 = " + (i1 + i2).toFixed(2) + " mA", 620, P.fy + 30, 15, FB, "center", "bold");
 }
 
-// ======================================================================
-// Equation panel
-// ======================================================================
-function drawEquation() {
-  const tt = t, v1 = V1(tt), v2 = V2(tt), i1 = v1 / R1, i2 = v2 / R2, id = ideal(tt), vo = VO(tt);
-  box(956, 60, 414, 450);
-  text("Summing amplifier", 976, 88, 20, INK, "left", "bold");
-  text("V_{out} = −R_f (V_1/R_1 + V_2/R_2)", 976, 130, 22, INK, "left", "bold");
-  const f = v => (v >= 0 ? "" : "−") + Math.abs(v).toFixed(2);
-  text("I_1 = " + f(v1) + " V ÷ 10 kΩ = " + f(i1) + " mA", 976, 180, 18, CIN, "left", "bold");
-  text("I_2 = " + f(v2) + " V ÷ 10 kΩ = " + f(i2) + " mA", 976, 214, 18, C2, "left", "bold");
-  text("I_f = I_1 + I_2 = " + f(i1 + i2) + " mA", 976, 248, 18, FB, "left", "bold");
-  text("V_{out} = −I_f × R_f = " + f(id) + " V", 976, 290, 20, COUT, "left", "bold");
-  // short form for equal resistors
-  roundRect(970, 320, 386, 104, 10); ctx.fillStyle = "#eef4fd"; ctx.fill();
-  if (S.rf === 10) {
-    text("R_1 = R_2 = R_f:", 986, 344, 17, MUTED, "left", "bold");
-    text("V_{out} = −(V_1 + V_2)", 986, 374, 22, INK, "left", "bold");
-    text("= −(" + f(v1) + " + " + f(v2) + ") = " + f(-(v1 + v2)) + " V", 986, 406, 19, COUT, "left", "bold");
-  } else {
-    text("R_1 = R_2 = 10 kΩ:", 986, 344, 17, MUTED, "left", "bold");
-    text("V_{out} = −(R_f ÷ 10 kΩ)(V_1 + V_2)", 986, 374, 20, INK, "left", "bold");
-    text("= −" + (S.rf / 10).toFixed(1) + " × (" + f(v1 + v2) + ") = " + f(id) + " V", 986, 406, 19, COUT, "left", "bold");
-  }
-  const clipped = Math.abs(id - vo) > 0.01;
-  roundRect(970, 446, 386, 44, 8); ctx.fillStyle = (clipped ? BAD : GOOD) + "18"; ctx.fill();
-  text(clipped ? "CLIPPING: output stuck at " + vo.toFixed(1) + " V" : (S.mode === 2 ? "TWO SOUNDS MIXED INTO ONE" : "OUTPUT = SUM, INVERTED"),
-    986, 468, 18, clipped ? BAD : GOOD, "left", "bold");
-}
-
 function draw() {
   text("Summing Amplifier", 40, 30, 28, INK, "left", "bold");
+  // scopes on the left, one per signal
+  scope(30, 60, 640, 226, { title: "V_1", vdiv: 2, traces: [{ f: V1, color: CIN, width: 3.5 }] });
+  scope(30, 293, 640, 226, { title: "V_2", vdiv: 2, traces: [{ f: V2, color: C2, width: 3.5 }] });
+  scope(30, 526, 640, 226, { title: "V_{out}", vdiv: 2, traces: [{ f: VO, color: COUT, width: 3.5 }] });
+  if (Math.abs(ideal(t) - VO(t)) > 0.01) tag("CLIPPING", 640, 550, BAD, "right");
+  // circuit on the right
+  ctx.save(); ctx.translate(680, 120); ctx.scale(0.78, 0.78);
   drawCircuit();
-  drawEquation();
-  scope(30, 524, 1340, 228, { title: "Scope", vdiv: 2, rails: false, traces: [
-    { f: V1, color: CIN, label: "V_1" }, { f: V2, color: C2, label: "V_2" },
-    { f: VO, color: COUT, label: "V_{out}", width: 3.5 }] });
+  ctx.restore();
 }
 
 // ======================================================================
@@ -335,7 +309,7 @@ function addSlider(label, min, max, step, value, fn, fmt) {
 }
 function setMode(k) {
   S.mode = k;
-  if (k === 0) { S.a = 1; S.b = 2; } else if (k === 1) { S.a = 1; S.b = 2; } else { S.a = 2; S.b = 1.5; }
+  if (k === 0) { S.a = 2; S.b = 3; } else if (k === 1) { S.a = 2; S.b = 2; } else { S.a = 2.5; S.b = 2; }
   build();
 }
 function build() {
