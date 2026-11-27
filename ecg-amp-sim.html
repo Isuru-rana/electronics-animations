@@ -1,0 +1,335 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ECG Amplifier</title>
+<style>
+  :root { --bg:#f6f7fb; --panel:#ffffff; --ink:#1a2233; --muted:#5b6478; --accent:#1f6fd6; }
+  * { box-sizing:border-box; }
+  html,body { margin:0; height:100%; background:var(--bg); color:var(--ink);
+    font-family:"Segoe UI", Roboto, Arial, sans-serif; overflow:hidden; }
+  #wrap { position:absolute; inset:0; display:flex; flex-direction:column; }
+  #stage { flex:1; position:relative; }
+  canvas { position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); }
+  .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; padding:7px 16px;
+    background:var(--panel); border-top:1px solid #dfe3ea; font-size:15px; }
+  .row label { color:var(--muted); }
+  .val { min-width:70px; font-weight:bold; }
+  input[type=range] { width:170px; accent-color:var(--accent); }
+  button { background:#eef1f6; color:var(--ink); border:1px solid #cfd5e0; border-radius:6px;
+    padding:6px 11px; font-size:14px; cursor:pointer; }
+  button:hover { background:#e2e7f0; }
+  button.on { background:#dbe9fb; border-color:#1f6fd6; font-weight:bold; }
+  .sp { flex:1; }
+  .keys { color:var(--muted); font-size:12px; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div id="stage"><canvas id="c"></canvas></div>
+  <div class="row" id="ctl"></div>
+</div>
+<script>
+"use strict";
+// ======================================================================
+// Model: heart signal about 1 mV at the electrodes, op-amp stages of x10 each
+// ======================================================================
+const HR = 72, FB = HR / 60, RAIL = 9, STAGE = 10;
+const S = { n: 1 };
+const sin = Math.sin, TAU = 2 * Math.PI;
+const clip = v => Math.max(-RAIL, Math.min(RAIL, v));
+const g = (p, mu, s) => Math.exp(-0.5 * ((p - mu) / s) ** 2);
+// P wave, QRS spike, T wave. R peak = 1
+const shape = p => 0.12 * g(p, 0.18, 0.03) - 0.12 * g(p, 0.37, 0.012) + g(p, 0.40, 0.014) - 0.25 * g(p, 0.43, 0.013) + 0.3 * g(p, 0.66, 0.045);
+const frac = x => x - Math.floor(x);
+const ecg = tt => 0.001 * shape(frac(tt * FB));
+const gainN = () => STAGE ** S.n;
+const outV = tt => clip(gainN() * ecg(tt));
+const level = k => Math.min(0.001 * STAGE ** k, RAIL);         // R peak after k stages
+
+// ======================================================================
+// Canvas + drawing helpers
+// ======================================================================
+const W = 1400, H = 760;
+const cv = document.getElementById("c"), ctx = cv.getContext("2d");
+function fit() {
+  const st = document.getElementById("stage");
+  const s = Math.min(st.clientWidth / W, st.clientHeight / H), dpr = window.devicePixelRatio || 1;
+  cv.style.width = W * s + "px"; cv.style.height = H * s + "px";
+  cv.width = W * s * dpr; cv.height = H * s * dpr; ctx.setTransform(s * dpr, 0, 0, s * dpr, 0, 0);
+}
+window.addEventListener("resize", fit);
+
+const INK = "#1a2233", MUTED = "#5b6478", GRID = "#e1e5ec", WIRE = "#4a5468", OFFC = "#b8bfcc";
+const CIN = "#e07a00", COUT = "#1f6fd6", GOOD = "#18a058", BAD = "#d93636";
+
+function font(size, weight) { return `${weight} ${size}px Segoe UI, Arial`; }
+function parseRich(str) {
+  const out = []; const rx = /_\{([^}]*)\}|_([A-Za-z0-9+\-−])/g; let pos = 0, m;
+  while ((m = rx.exec(str))) {
+    if (m.index > pos) out.push({ t: str.slice(pos, m.index), s: false });
+    out.push({ t: m[1] !== undefined ? m[1] : m[2], s: true }); pos = rx.lastIndex;
+  }
+  if (pos < str.length) out.push({ t: str.slice(pos), s: false });
+  return out;
+}
+function richWidth(str, size, weight = "normal") {
+  let w = 0;
+  for (const p of parseRich(str)) { ctx.font = font(p.s ? size * 0.66 : size, weight); w += ctx.measureText(p.t).width; }
+  return w;
+}
+function text(str, x, y, size = 16, color = INK, align = "left", weight = "normal") {
+  const segs = parseRich(String(str)), w = richWidth(String(str), size, weight);
+  let cx = align === "center" ? x - w / 2 : align === "right" ? x - w : x;
+  ctx.fillStyle = color; ctx.textBaseline = "middle"; ctx.textAlign = "left";
+  for (const p of segs) {
+    ctx.font = font(p.s ? size * 0.66 : size, weight);
+    ctx.fillText(p.t, cx, p.s ? y + size * 0.3 : y); cx += ctx.measureText(p.t).width;
+  }
+  return cx;
+}
+function poly(pts, color = WIRE, w = 3.5, dash) {
+  ctx.strokeStyle = color; ctx.lineWidth = w; ctx.lineCap = "round"; ctx.lineJoin = "round";
+  ctx.setLineDash(dash || []);
+  ctx.beginPath(); ctx.moveTo(pts[0][0], pts[0][1]); for (const p of pts.slice(1)) ctx.lineTo(p[0], p[1]); ctx.stroke();
+  ctx.setLineDash([]);
+}
+function roundRect(x, y, w, h, r) {
+  ctx.beginPath(); ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath();
+}
+function box(x, y, w, h, fill = "#fff", stroke = "#dfe3ea") {
+  roundRect(x, y, w, h, 12); ctx.fillStyle = fill; ctx.fill(); ctx.strokeStyle = stroke; ctx.lineWidth = 1.5; ctx.stroke();
+}
+function dot(x, y, r = 6, c = INK) { ctx.fillStyle = c; ctx.beginPath(); ctx.arc(x, y, r, 0, TAU); ctx.fill(); }
+function fmtV(v) {
+  v = Math.abs(v);
+  if (v >= 1) return (v >= 10 ? v.toFixed(0) : v.toFixed(1)) + " V";
+  if (v >= 0.001) return (v * 1000 >= 10 ? (v * 1000).toFixed(0) : (v * 1000).toFixed(1)) + " mV";
+  return (v * 1e6).toFixed(0) + " µV";
+}
+
+function amp(cx, cy, w, h, o) {
+  const x0 = cx - w / 2, x1 = cx + w / 2;
+  ctx.setLineDash(o.ghost ? [8, 7] : []);
+  ctx.fillStyle = o.ghost ? "rgba(255,255,255,0.6)" : o.fill; ctx.strokeStyle = o.ghost ? OFFC : INK; ctx.lineWidth = 3.5;
+  ctx.beginPath(); ctx.moveTo(x0, cy - h / 2); ctx.lineTo(x1, cy); ctx.lineTo(x0, cy + h / 2); ctx.closePath(); ctx.fill(); ctx.stroke();
+  ctx.setLineDash([]);
+}
+function zigH(x0, x1, y, color = WIRE) {
+  const n = 6, d = (x1 - x0) / n, pts = [[x0, y]];
+  for (let k = 0; k < n; k++) pts.push([x0 + d * (k + 0.5), y + (k % 2 ? 7 : -7)]);
+  pts.push([x1, y]); poly(pts, color, 3);
+}
+function heartPath(x, y, s) {
+  ctx.beginPath(); ctx.moveTo(x, y + 0.9 * s);
+  ctx.bezierCurveTo(x - 1.3 * s, y, x - 0.7 * s, y - 0.95 * s, x, y - 0.35 * s);
+  ctx.bezierCurveTo(x + 0.7 * s, y - 0.95 * s, x + 1.3 * s, y, x, y + 0.9 * s); ctx.closePath();
+}
+
+// ======================================================================
+// Layout
+// ======================================================================
+const CY = 175, SW = 112, SH = 104;
+const SX = [390, 585, 780];                       // stage centres
+const Y0 = 428, HMAX = 86;
+const px = v => HMAX * Math.pow(Math.min(Math.abs(v), 1) / 1, 0.42);
+
+function drawPatient() {
+  const beat = g(frac(t * FB), 0.41, 0.05);
+  // body
+  ctx.fillStyle = "#efe3d8"; ctx.strokeStyle = "#b88d70"; ctx.lineWidth = 3;
+  ctx.beginPath(); ctx.arc(140, 86, 26, 0, TAU); ctx.fill(); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(126, 110); ctx.lineTo(154, 110); ctx.quadraticCurveTo(222, 116, 214, 160);
+  ctx.lineTo(196, 300); ctx.lineTo(84, 300); ctx.lineTo(66, 160); ctx.quadraticCurveTo(58, 116, 126, 110); ctx.closePath(); ctx.fill(); ctx.stroke();
+  // heart
+  heartPath(138, 190, 26 * (1 + 0.22 * beat)); ctx.fillStyle = BAD; ctx.fill();
+  text("Patient", 176, 86, 16, MUTED, "left", "bold");
+  // electrodes and leads
+  const st = SX[0] - SW / 2;
+  poly([[190, 142], [300, 142], [300, CY - 25], [st, CY - 25]]);
+  poly([[186, 236], [300, 236], [300, CY + 25], [st, CY + 25]]);
+  for (const [x, y] of [[190, 142], [186, 236]]) {
+    ctx.fillStyle = "#fff"; ctx.strokeStyle = "#7a8396"; ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(x, y, 11, 0, TAU); ctx.fill(); ctx.stroke(); dot(x, y, 4, "#7a8396");
+  }
+  text("electrodes", 250, 262, 14, MUTED, "center", "bold");
+  text("1 mV", 250, 124, 15, CIN, "center", "bold");
+}
+
+function drawStages() {
+  for (let k = 0; k < 3; k++) {
+    const on = k < S.n, cx = SX[k], x0 = cx - SW / 2, x1 = cx + SW / 2;
+    // wire from the previous stage (stage 1 is fed by the electrodes)
+    if (k > 0) {
+      const px0 = SX[k - 1] + SW / 2;
+      if (on) poly([[px0, CY], [x0 - 22, CY], [x0 - 22, CY + 25], [x0, CY + 25]]);
+      else poly([[px0, CY], [x1, CY]], k <= S.n ? WIRE : WIRE);
+    }
+    if (on) {
+      // feedback loop with resistor: this is an op-amp circuit
+      poly([[x1, CY], [x1 + 10, CY], [x1 + 10, CY - 66], [cx + 30, CY - 66]]);
+      zigH(cx - 30, cx + 30, CY - 66);
+      poly([[cx - 30, CY - 66], [x0 - 12, CY - 66], [x0 - 12, CY - 25], [x0, CY - 25]]);
+      dot(x0 - 12, CY - 25, 5, WIRE);
+    }
+    amp(cx, CY, SW, SH, { fill: k === 0 ? "#ffe2c8" : "#dbe9fb", ghost: !on });
+    if (on) { text("−", x0 + 12, CY - 25, 20, INK, "center", "bold"); text("+", x0 + 12, CY + 25, 20, INK, "center", "bold"); }
+    text("×10", x0 + 46, CY, 19, on ? INK : OFFC, "center", "bold");
+    text("Op-amp " + (k + 1), cx, CY + 76, 17, on ? INK : OFFC, "center", "bold");
+    text(on ? (k === 0 ? "difference amp" : "gain stage") : "not used", cx, CY + 98, 14, on ? MUTED : OFFC, "center");
+  }
+  // to the monitor
+  poly([[SX[S.n - 1] + SW / 2, CY], [960, CY]]);
+}
+
+function drawMonitor() {
+  const ok = level(S.n) >= 0.5;
+  ctx.fillStyle = "#2a3140"; roundRect(960, 60, 410, 244, 16); ctx.fill();
+  const sx = 976, sy = 76, sw = 300, sh = 190, mid = sy + sh * 0.62;
+  ctx.fillStyle = "#07110c"; roundRect(sx, sy, sw, sh, 8); ctx.fill();
+  ctx.strokeStyle = "#123222"; ctx.lineWidth = 1;
+  for (let i = 1; i < 10; i++) { ctx.beginPath(); ctx.moveTo(sx + sw * i / 10, sy); ctx.lineTo(sx + sw * i / 10, sy + sh); ctx.stroke(); }
+  for (let j = 1; j < 6; j++) { ctx.beginPath(); ctx.moveTo(sx, sy + sh * j / 6); ctx.lineTo(sx + sw, sy + sh * j / 6); ctx.stroke(); }
+  // sweeping trace, 3 s across the screen
+  const span = 3, cur = frac(t / span) * sw, kV = 95;
+  ctx.save(); ctx.beginPath(); ctx.rect(sx, sy, sw, sh); ctx.clip();
+  ctx.strokeStyle = "#39ff7a"; ctx.lineWidth = 2.5; ctx.beginPath(); let pen = false;
+  for (let p = 0; p <= sw; p += 1) {
+    const ahead = ((p - cur) % sw + sw) % sw;
+    if (ahead > 0 && ahead < 16) { pen = false; continue; }
+    const age = ((cur - p) % sw + sw) % sw / sw * span, y = mid - outV(t - age) * kV;
+    pen ? ctx.lineTo(sx + p, y) : ctx.moveTo(sx + p, y); pen = true;
+  }
+  ctx.stroke(); ctx.restore();
+  text("ECG", sx + 10, sy + 16, 14, "#39ff7a", "left", "bold");
+  // heart rate
+  text("HR", 1292, 98, 16, "#9fb4a8", "left", "bold");
+  text(ok ? String(HR) : "– –", 1292, 150, 46, ok ? "#39ff7a" : "#5b6b62", "left", "bold");
+  if (ok) { heartPath(1330, 210, 16 * (1 + 0.3 * g(frac(t * FB), 0.42, 0.04))); ctx.fillStyle = "#ff4d5e"; ctx.fill(); }
+  text(ok ? "" : "NO SIGNAL", 1286, 210, 13, "#ff8a8a", "left", "bold");
+  text("Monitor: needs about 1 V", 976, 286, 15, "#c9d1dc", "left", "bold");
+}
+
+function drawFunnels() {
+  box(30, 316, 910, 224);
+  text("Signal size", 50, 338, 17, INK, "left", "bold");
+  for (let k = 0; k < 3; k++) {
+    const on = k < S.n, x0 = SX[k] - SW / 2, x1 = SX[k] + SW / 2, h0 = px(level(k)) + 5, h1 = px(level(k + 1)) + 5;
+    const top = u => Y0 - (h0 + (h1 - h0) * u * u);
+    ctx.beginPath(); ctx.moveTo(x0, Y0 - h0);
+    for (let i = 1; i <= 30; i++) ctx.lineTo(x0 + (x1 - x0) * i / 30, top(i / 30));
+    for (let i = 30; i >= 0; i--) ctx.lineTo(x0 + (x1 - x0) * i / 30, 2 * Y0 - top(i / 30));
+    ctx.closePath(); if (on) { ctx.fillStyle = (k === 0 ? "#ffe2c8" : "#dbe9fb") + "cc"; ctx.fill(); }
+    ctx.strokeStyle = on ? (k === 0 ? CIN : COUT) : OFFC; ctx.lineWidth = 4; ctx.setLineDash(on ? [] : [8, 7]);
+    for (const sgn of [1, -1]) { ctx.beginPath(); for (let i = 0; i <= 30; i++) { const y = Y0 + sgn * (Y0 - top(i / 30)), xx = x0 + (x1 - x0) * i / 30; i ? ctx.lineTo(xx, y) : ctx.moveTo(xx, y); } ctx.stroke(); }
+    ctx.setLineDash([]);
+  }
+  // wave size along the chain
+  const A = x => {
+    let a = px(level(0));
+    for (let k = 0; k < S.n; k++) {
+      const x0 = SX[k] - SW / 2, x1 = SX[k] + SW / 2;
+      if (x < x0) return a;
+      if (x < x1) { const u = (x - x0) / (x1 - x0); return a + (px(level(k + 1)) - a) * u * u; }
+      a = px(level(k + 1));
+    }
+    return a;
+  };
+  const xs = 170, xe = 925, lam = 190;
+  ctx.strokeStyle = "#c2185b"; ctx.lineWidth = 3; ctx.beginPath();
+  for (let x = xs; x <= xe; x += 1) { const y = Y0 - A(x) * shape(frac(t * FB - (x - xs) / lam)); x === xs ? ctx.moveTo(x, y) : ctx.lineTo(x, y); }
+  ctx.stroke();
+  // values between stages
+  text(fmtV(level(0)), xs + 8, Y0 - px(level(0)) - 30, 15, CIN, "left", "bold");
+  for (let k = 1; k <= S.n; k++) {
+    const xm = k < 3 ? (SX[k - 1] + SX[k]) / 2 : 870;
+    text(fmtV(level(k)), xm, Y0 + 24, 15, COUT, "center", "bold");
+  }
+  // what the monitor needs
+  const bx = 930, hb = px(1);
+  poly([[bx, Y0 - hb], [bx, Y0 + hb]], GOOD, 3); poly([[bx - 7, Y0 - hb], [bx + 6, Y0 - hb]], GOOD, 3); poly([[bx - 7, Y0 + hb], [bx + 6, Y0 + hb]], GOOD, 3);
+  text("monitor needs", bx - 8, Y0 - hb + 4, 13, GOOD, "right", "bold");
+}
+
+function drawEquation() {
+  const n = S.n, G = gainN(), ok = level(n) >= 0.5;
+  box(956, 316, 414, 224);
+  text("Gains multiply", 976, 340, 19, INK, "left", "bold");
+  const terms = ["A_1", "A_2", "A_3"].slice(0, n).join(" × ");
+  text("A_{total} = " + terms, 976, 380, 24, INK, "left", "bold");
+  text(n === 1 ? "= 10" : "= " + Array(n).fill("10").join(" × ") + " = " + G, 1040, 414, 24, COUT, "left", "bold");
+  text("V_{out} = 1 mV × " + G + " = " + fmtV(level(n)), 976, 452, 24, COUT, "left", "bold");
+  const s = ok ? "HEARTBEAT ON THE MONITOR" : "TOO SMALL FOR THE MONITOR", c = ok ? GOOD : BAD;
+  roundRect(970, 482, 386, 42, 8); ctx.fillStyle = c + "18"; ctx.fill();
+  text(s, 986, 504, 19, c, "left", "bold");
+}
+
+// ---------- scope
+const WIN = 4;
+function scope(x, y, w, h, o) {
+  box(x, y, w, h);
+  text(o.title, x + 16, y + 24, 18, INK, "left", "bold");
+  const gx = x + 14, gy = y + 46, gw = w - 28, gh = h - 82, nx = 10, ny = 8;
+  ctx.fillStyle = "#fbfcfe"; ctx.fillRect(gx, gy, gw, gh);
+  ctx.strokeStyle = GRID; ctx.lineWidth = 1;
+  for (let i = 0; i <= nx; i++) { ctx.beginPath(); ctx.moveTo(gx + gw * i / nx, gy); ctx.lineTo(gx + gw * i / nx, gy + gh); ctx.stroke(); }
+  for (let j = 0; j <= ny; j++) { ctx.beginPath(); ctx.moveTo(gx, gy + gh * j / ny); ctx.lineTo(gx + gw, gy + gh * j / ny); ctx.stroke(); }
+  const cy = gy + gh * 0.62, k = (gh / ny) / o.vdiv;
+  for (const m of o.marks || []) poly([[gx, cy - m.v * k], [gx + gw, cy - m.v * k]], m.c, 2, [7, 5]);
+  ctx.save(); ctx.beginPath(); ctx.rect(gx, gy, gw, gh); ctx.clip();
+  ctx.strokeStyle = o.color; ctx.lineWidth = 3; ctx.beginPath();
+  for (let p = 0; p <= gw; p += 1) { const tau = t - WIN + WIN * p / gw, py = cy - o.f(tau) * k; p ? ctx.lineTo(gx + p, py) : ctx.moveTo(gx + p, py); }
+  ctx.stroke(); ctx.restore();
+  if (o.note) text(o.note, gx, gy + gh + 20, 14, o.noteColor || MUTED, "left", "bold");
+  text(o.unit, gx + gw, gy + gh + 20, 13, MUTED, "right");
+}
+
+function draw() {
+  text("ECG Amplifier", 40, 30, 28, INK, "left", "bold");
+  drawPatient();
+  drawStages();
+  drawMonitor();
+  drawFunnels();
+  drawEquation();
+  scope(30, 554, 660, 198, { title: "At the electrodes (zoomed in)", f: tt => ecg(tt) * 1000, vdiv: 0.5, unit: "0.5 mV/div", color: CIN });
+  scope(700, 554, 670, 198, { title: "After the last op-amp", f: outV, vdiv: 0.5, unit: "0.5 V/div", color: COUT,
+    marks: [{ v: 1, c: GOOD }], note: "monitor needs about 1 V", noteColor: GOOD });
+}
+
+// ======================================================================
+// Controls
+// ======================================================================
+const ctl = document.getElementById("ctl");
+let t = 0, paused = false;
+function setN(n) { S.n = n; build(); }
+function build() {
+  ctl.innerHTML = "";
+  for (const n of [1, 2, 3]) {
+    const b = document.createElement("button"); b.textContent = n + (n === 1 ? " op-amp" : " op-amps") + " (×" + STAGE ** n + ")";
+    if (n === S.n) b.classList.add("on"); b.addEventListener("click", () => setN(n)); ctl.appendChild(b);
+  }
+  const sp = document.createElement("span"); sp.className = "sp"; ctl.appendChild(sp);
+  const pb = document.createElement("button"); pb.id = "pause"; pb.textContent = paused ? "Play (Space)" : "Pause (Space)";
+  pb.addEventListener("click", togglePause); ctl.appendChild(pb);
+  const ks = document.createElement("span"); ks.className = "keys"; ks.textContent = "1 to 3: op-amps   F: fullscreen"; ctl.appendChild(ks);
+}
+function togglePause() { paused = !paused; const b = document.getElementById("pause"); if (b) b.textContent = paused ? "Play (Space)" : "Pause (Space)"; }
+window.addEventListener("keydown", e => {
+  if (e.key >= "1" && e.key <= "3") setN(+e.key);
+  else if (e.key === " ") { e.preventDefault(); togglePause(); }
+  else if (e.key === "f" || e.key === "F") { if (document.fullscreenElement) document.exitFullscreen(); else document.documentElement.requestFullscreen(); }
+});
+
+let last = performance.now();
+function frame(now) {
+  const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  if (!paused) t += dt;
+  ctx.fillStyle = "#f6f7fb"; ctx.fillRect(0, 0, W, H);
+  draw();
+  requestAnimationFrame(frame);
+}
+build(); fit(); requestAnimationFrame(frame);
+</script>
+</body>
+</html>

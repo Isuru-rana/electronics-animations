@@ -1,0 +1,267 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Amplifier Gain</title>
+<style>
+  :root { --bg:#f6f7fb; --panel:#ffffff; --ink:#1a2233; --muted:#5b6478; --accent:#1f6fd6; }
+  * { box-sizing:border-box; }
+  html,body { margin:0; height:100%; background:var(--bg); color:var(--ink);
+    font-family:"Segoe UI", Roboto, Arial, sans-serif; overflow:hidden; }
+  #wrap { position:absolute; inset:0; display:flex; flex-direction:column; }
+  #stage { flex:1; position:relative; }
+  canvas { position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); touch-action:none; }
+  .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; padding:7px 16px;
+    background:var(--panel); border-top:1px solid #dfe3ea; font-size:15px; }
+  .row label { color:var(--muted); }
+  .val { min-width:80px; font-weight:bold; }
+  input[type=range] { width:190px; accent-color:var(--accent); }
+  button { background:#eef1f6; color:var(--ink); border:1px solid #cfd5e0; border-radius:6px;
+    padding:6px 11px; font-size:14px; cursor:pointer; }
+  button:hover { background:#e2e7f0; }
+  .sp { flex:1; }
+  .keys { color:var(--muted); font-size:12px; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div id="stage"><canvas id="c"></canvas></div>
+  <div class="row" id="ctl"></div>
+</div>
+<script>
+"use strict";
+// ======================================================================
+// Model: one amplifier, gain knob, supply +/-9 V
+// ======================================================================
+const RAIL = 9, FS = 0.5;
+const S = { gain: 5, vin: 1.0 };                 // vin in V peak to peak
+const sin = Math.sin, TAU = 2 * Math.PI;
+const clip = v => Math.max(-RAIL, Math.min(RAIL, v));
+const vinF = tt => S.vin / 2 * sin(TAU * FS * tt);
+const voutF = tt => clip(S.gain * vinF(tt));
+const outPP = () => 2 * Math.min(S.gain * S.vin / 2, RAIL);
+
+// ======================================================================
+// Canvas + helpers
+// ======================================================================
+const W = 1400, H = 760;
+const cv = document.getElementById("c"), ctx = cv.getContext("2d");
+function fit() {
+  const st = document.getElementById("stage");
+  const s = Math.min(st.clientWidth / W, st.clientHeight / H), dpr = window.devicePixelRatio || 1;
+  cv.style.width = W * s + "px"; cv.style.height = H * s + "px";
+  cv.width = W * s * dpr; cv.height = H * s * dpr; ctx.setTransform(s * dpr, 0, 0, s * dpr, 0, 0);
+}
+window.addEventListener("resize", fit);
+
+const INK = "#1a2233", MUTED = "#5b6478", GRID = "#e1e5ec", WIRE = "#4a5468";
+const CIN = "#e07a00", COUT = "#1f6fd6", GOOD = "#18a058", BAD = "#d93636";
+
+function font(size, weight) { return `${weight} ${size}px Segoe UI, Arial`; }
+function parseRich(str) {
+  const out = []; const rx = /_\{([^}]*)\}|_([A-Za-z0-9+\-−])/g; let pos = 0, m;
+  while ((m = rx.exec(str))) {
+    if (m.index > pos) out.push({ t: str.slice(pos, m.index), s: false });
+    out.push({ t: m[1] !== undefined ? m[1] : m[2], s: true }); pos = rx.lastIndex;
+  }
+  if (pos < str.length) out.push({ t: str.slice(pos), s: false });
+  return out;
+}
+function richWidth(str, size, weight = "normal") {
+  let w = 0;
+  for (const p of parseRich(String(str))) { ctx.font = font(p.s ? size * 0.66 : size, weight); w += ctx.measureText(p.t).width; }
+  return w;
+}
+function text(str, x, y, size = 16, color = INK, align = "left", weight = "normal") {
+  const segs = parseRich(String(str)), w = richWidth(String(str), size, weight);
+  let cx = align === "center" ? x - w / 2 : align === "right" ? x - w : x;
+  ctx.fillStyle = color; ctx.textBaseline = "middle"; ctx.textAlign = "left";
+  for (const p of segs) {
+    ctx.font = font(p.s ? size * 0.66 : size, weight);
+    ctx.fillText(p.t, cx, p.s ? y + size * 0.3 : y); cx += ctx.measureText(p.t).width;
+  }
+  return cx;
+}
+function poly(pts, color = WIRE, w = 3.5, dash) {
+  ctx.strokeStyle = color; ctx.lineWidth = w; ctx.lineCap = "round"; ctx.lineJoin = "round";
+  ctx.setLineDash(dash || []);
+  ctx.beginPath(); ctx.moveTo(pts[0][0], pts[0][1]); for (const p of pts.slice(1)) ctx.lineTo(p[0], p[1]); ctx.stroke();
+  ctx.setLineDash([]);
+}
+function roundRect(x, y, w, h, r) {
+  ctx.beginPath(); ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath();
+}
+function box(x, y, w, h, fill = "#fff", stroke = "#dfe3ea") {
+  roundRect(x, y, w, h, 12); ctx.fillStyle = fill; ctx.fill(); ctx.strokeStyle = stroke; ctx.lineWidth = 1.5; ctx.stroke();
+}
+// fraction: numerator over denominator, returns the x after it
+function frac(x, y, num, den, size, cNum, cDen) {
+  const w = Math.max(richWidth(num, size, "bold"), richWidth(den, size, "bold")) + 16;
+  text(num, x + w / 2, y - size * 0.62, size, cNum, "center", "bold");
+  poly([[x, y], [x + w, y]], INK, 3);
+  text(den, x + w / 2, y + size * 0.68, size, cDen, "center", "bold");
+  return x + w;
+}
+
+// ---------- scope: rolling traces over the last WIN seconds
+const WIN = 6;
+function scope(x, y, w, h, o) {
+  box(x, y, w, h);
+  text(o.title, x + 16, y + 24, 18, INK, "left", "bold");
+  const gx = x + 14, gy = y + 46, gw = w - 28, gh = h - 82, nx = 20, ny = 10;
+  ctx.fillStyle = "#fbfcfe"; ctx.fillRect(gx, gy, gw, gh);
+  ctx.strokeStyle = GRID; ctx.lineWidth = 1;
+  for (let i = 0; i <= nx; i++) { ctx.beginPath(); ctx.moveTo(gx + gw * i / nx, gy); ctx.lineTo(gx + gw * i / nx, gy + gh); ctx.stroke(); }
+  for (let j = 0; j <= ny; j++) { ctx.beginPath(); ctx.moveTo(gx, gy + gh * j / ny); ctx.lineTo(gx + gw, gy + gh * j / ny); ctx.stroke(); }
+  ctx.strokeStyle = "#c5ccd8"; ctx.beginPath(); ctx.moveTo(gx, gy + gh / 2); ctx.lineTo(gx + gw, gy + gh / 2); ctx.stroke();
+  const cy = gy + gh / 2, k = (gh / ny) / o.vdiv;
+  for (const m of o.marks || []) poly([[gx, cy - m.v * k], [gx + gw, cy - m.v * k]], m.c, 2, [7, 5]);
+  ctx.save(); ctx.beginPath(); ctx.rect(gx, gy, gw, gh); ctx.clip();
+  for (const tr of o.traces) {
+    ctx.strokeStyle = tr.color; ctx.lineWidth = tr.width || 3; ctx.beginPath();
+    for (let px = 0; px <= gw; px += 1) {
+      const tau = t - WIN + WIN * px / gw, py = cy - tr.f(tau) * k;
+      px ? ctx.lineTo(gx + px, py) : ctx.moveTo(gx + px, py);
+    }
+    ctx.stroke();
+  }
+  ctx.restore();
+  let lx = gx;
+  for (const tr of o.traces) {
+    poly([[lx, gy + gh + 20], [lx + 22, gy + gh + 20]], tr.color, 4);
+    lx = text(tr.label, lx + 28, gy + gh + 20, 15, INK, "left", "bold") + 22;
+  }
+  text(o.unit, gx + gw, gy + gh + 20, 13, MUTED, "right");
+}
+
+// ======================================================================
+// Funnel view
+// ======================================================================
+const Y0 = 300, K = 20;                         // centre line, pixels per volt
+const XA = 190, XB = 400, XC = 640, XD = 830;     // input pipe, funnel, output pipe
+function drawFunnel() {
+  box(30, 60, 910, 470);
+  const hin = K * S.vin / 2, hout = K * Math.min(S.gain * S.vin / 2, RAIL);
+  // supply limit
+  for (const s of [1, -1]) poly([[XC, Y0 - s * K * RAIL], [XD + 30, Y0 - s * K * RAIL]], BAD + "88", 2, [7, 5]);
+  text("+9 V", XD + 36, Y0 - K * RAIL, 13, BAD, "left", "bold"); text("−9 V", XD + 36, Y0 + K * RAIL, 13, BAD, "left", "bold");
+  // funnel: opening follows the gain knob
+  const h0 = hin + 10, h1 = Math.max(hout, hin) + 12;
+  const top = u => Y0 - (h0 + (h1 - h0) * u * u);
+  ctx.beginPath(); ctx.moveTo(XB, Y0 - h0);
+  for (let k = 1; k <= 40; k++) { const u = k / 40; ctx.lineTo(XB + (XC - XB) * u, top(u)); }
+  for (let k = 40; k >= 0; k--) { const u = k / 40; ctx.lineTo(XB + (XC - XB) * u, 2 * Y0 - top(u)); }
+  ctx.closePath(); ctx.fillStyle = "#f8d0d0aa"; ctx.fill();
+  for (const sgn of [1, -1]) {
+    ctx.strokeStyle = BAD; ctx.lineWidth = 5; ctx.beginPath();
+    for (let k = 0; k <= 40; k++) { const u = k / 40, y = Y0 + sgn * (Y0 - top(u)); k ? ctx.lineTo(XB + (XC - XB) * u, y) : ctx.moveTo(XB, y); }
+    ctx.stroke();
+  }
+  text("Amplifier", (XB + XC) / 2, 84, 19, INK, "center", "bold");
+  // the wave: amplitude grows through the funnel
+  const amp = x => x < XB ? hin : x < XC ? hin + (hout - hin) * ((x - XB) / (XC - XB)) ** 2 : hout;
+  const lam = 120, ph = TAU * FS * t;
+  for (const [x0, x1, c] of [[XA, XB, CIN], [XB, XC, null], [XC, XD, COUT]]) {
+    ctx.lineWidth = 4; ctx.beginPath();
+    for (let x = x0; x <= x1; x += 2) {
+      let v = amp(x) * sin(TAU * x / lam - ph);
+      v = Math.max(-K * RAIL, Math.min(K * RAIL, x >= XC ? K * clip(S.gain * S.vin / 2 * sin(TAU * x / lam - ph)) : v));
+      x === x0 ? ctx.moveTo(x, Y0 - v) : ctx.lineTo(x, Y0 - v);
+    }
+    if (c) { ctx.strokeStyle = c; ctx.stroke(); }
+    else { const g = ctx.createLinearGradient(XB, 0, XC, 0); g.addColorStop(0, CIN); g.addColorStop(1, COUT); ctx.strokeStyle = g; ctx.stroke(); }
+  }
+  // measuring brackets (peak to peak)
+  const br = (x, h, c, lab, val, right) => {
+    poly([[x, Y0 - h], [x, Y0 + h]], c, 3);
+    poly([[x - 8, Y0 - h], [x + 8, Y0 - h]], c, 3); poly([[x - 8, Y0 + h], [x + 8, Y0 + h]], c, 3);
+    text(lab, x + (right ? 14 : -14), Y0 - 14, 20, c, right ? "left" : "right", "bold");
+    text(val, x + (right ? 14 : -14), Y0 + 14, 20, c, right ? "left" : "right", "bold");
+  };
+  br(XA + 8, Math.max(hin, 3), CIN, "V_{in}", S.vin.toFixed(1) + " V", false);
+  br(XD + 14, Math.max(hout, 3), COUT, "V_{out}", outPP().toFixed(1) + " V", true);
+  text("peak to peak", XA - 6, Y0 + 44, 13, MUTED, "right");
+}
+
+// ======================================================================
+// Equation panel
+// ======================================================================
+let flash = 0;
+function drawEquation() {
+  box(956, 60, 414, 470);
+  text("Gain", 980, 90, 22, INK, "left", "bold");
+  const g = outPP() / S.vin;
+  // general form
+  let x = text("A_v =", 990, 170, 34, INK, "left", "bold") + 12;
+  frac(x, 170, "V_{out}", "V_{in}", 34, COUT, CIN);
+  // numbers in
+  x = text("A_v =", 990, 300, 34, INK, "left", "bold") + 12;
+  frac(x, 300, outPP().toFixed(1) + " V", S.vin.toFixed(1) + " V", 34, COUT, CIN);
+  // result
+  if (flash > 0) { roundRect(980, 372, 366, 74, 12); ctx.fillStyle = `rgba(31,111,214,${0.18 * flash})`; ctx.fill(); }
+  text("A_v = " + (g >= 10 ? g.toFixed(1) : g.toFixed(2).replace(/0$/, "")), 990, 410, 44, COUT, "left", "bold");
+  const clipped = S.gain * S.vin / 2 > RAIL;
+  if (clipped) {
+    roundRect(980, 466, 366, 44, 8); ctx.fillStyle = BAD + "18"; ctx.fill();
+    text("CLIPPING: output stops at ±9 V", 996, 488, 18, BAD, "left", "bold");
+  } else text("output is " + (g >= 10 ? g.toFixed(0) : g.toFixed(1)) + " times bigger", 990, 488, 19, MUTED, "left", "bold");
+}
+
+function draw() {
+  text("Amplifier Gain", 40, 30, 28, INK, "left", "bold");
+  drawFunnel();
+  drawEquation();
+  scope(30, 544, 1340, 208, { title: "Scope", unit: "2 V/div", vdiv: 2,
+    marks: [{ v: RAIL, c: BAD + "88" }, { v: -RAIL, c: BAD + "88" }],
+    traces: [{ f: vinF, color: CIN, label: "V_{in}" }, { f: voutF, color: COUT, label: "V_{out}", width: 3.5 }] });
+}
+
+// ======================================================================
+// Controls
+// ======================================================================
+const ctl = document.getElementById("ctl");
+let t = 0, paused = false, gainSl, vinSl;
+function html(s) { return s.replace(/_\{([^}]*)\}/g, "<sub>$1</sub>"); }
+function slider(label, min, max, step, value, fn, fmt) {
+  const l = document.createElement("label"); l.innerHTML = html(label);
+  const i = document.createElement("input"); i.type = "range"; i.min = min; i.max = max; i.step = step; i.value = value;
+  const o = document.createElement("span"); o.className = "val"; o.textContent = fmt(+value);
+  i.addEventListener("input", () => { fn(+i.value); o.textContent = fmt(+i.value); flash = 1; });
+  ctl.append(l, i, o); return { i, o, fmt };
+}
+function sync(sl, v) { sl.i.value = v; sl.o.textContent = sl.fmt(v); flash = 1; }
+function build() {
+  gainSl = slider("Gain knob (output size)", 1, 12, 0.5, S.gain, v => (S.gain = v), v => "×" + v);
+  for (const g of [1, 2, 5, 10]) {
+    const b = document.createElement("button"); b.textContent = "×" + g;
+    b.addEventListener("click", () => { S.gain = g; sync(gainSl, g); }); ctl.appendChild(b);
+  }
+  vinSl = slider("V_{in}", 0.5, 2, 0.1, S.vin, v => (S.vin = v), v => v.toFixed(1) + " V p-p");
+  const sp = document.createElement("span"); sp.className = "sp"; ctl.appendChild(sp);
+  const pb = document.createElement("button"); pb.id = "pause"; pb.textContent = "Pause (Space)";
+  pb.addEventListener("click", togglePause); ctl.appendChild(pb);
+  const ks = document.createElement("span"); ks.className = "keys"; ks.textContent = "Left / Right: gain   Up / Down: V_in   F: fullscreen"; ctl.appendChild(ks);
+}
+function togglePause() { paused = !paused; document.getElementById("pause").textContent = paused ? "Play (Space)" : "Pause (Space)"; }
+window.addEventListener("keydown", e => {
+  if (e.key === "ArrowRight" || e.key === "ArrowLeft") { S.gain = Math.max(1, Math.min(12, S.gain + (e.key === "ArrowRight" ? 0.5 : -0.5))); sync(gainSl, S.gain); }
+  else if (e.key === "ArrowUp" || e.key === "ArrowDown") { e.preventDefault(); S.vin = Math.round(Math.max(0.5, Math.min(2, S.vin + (e.key === "ArrowUp" ? 0.1 : -0.1))) * 10) / 10; sync(vinSl, S.vin); }
+  else if (e.key === " ") { e.preventDefault(); togglePause(); }
+  else if (e.key === "f" || e.key === "F") { if (document.fullscreenElement) document.exitFullscreen(); else document.documentElement.requestFullscreen(); }
+});
+
+let last = performance.now();
+function frame(now) {
+  const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  if (!paused) t += dt;
+  flash = Math.max(0, flash - dt * 1.5);
+  ctx.fillStyle = "#f6f7fb"; ctx.fillRect(0, 0, W, H);
+  draw();
+  requestAnimationFrame(frame);
+}
+build(); fit(); requestAnimationFrame(frame);
+</script>
+</body>
+</html>
