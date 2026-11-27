@@ -14,6 +14,7 @@ Live: https://isuru-rana.github.io/electronics-animations/
 | `amp-stages-sim.html` | Amplifier stages: mic straight to a power amp, power amp at full gain, pre-amp first; signal size shown as funnels |
 | `amp-gain-sim.html` | Amplifier gain: funnel view, gain knob, live A_v = V_out ÷ V_in with measured voltages, clipping |
 | `ecg-amp-sim.html` | ECG use case: 1 mV heartbeat through 1, 2 or 3 op-amp stages of ×10, gains multiply, patient monitor |
+| `summing-amp-sim.html` | Summing amplifier: input currents add at the virtual ground, live V_out = −R_f(V_1/R_1 + V_2/R_2), DC, sine + DC, two-sine mixer |
 | `opamp-sim.html` | Op-amp: open and closed loop, inverting, non inverting, gain control, noise cancelling headphones, differential amplifier |
 | `diode-meter-sim.html` | Diode knee voltage circuit; how a voltmeter reads the difference between red and COM |
 
@@ -32,6 +33,8 @@ Live: https://isuru-rana.github.io/electronics-animations/
 **Amplifier gain sim:** Left / Right: gain. Up / Down: V_in. Space: pause. F: fullscreen.
 
 **ECG amplifier sim:** 1 to 3: number of op-amp stages. Space: pause. F: fullscreen.
+
+**Summing amp sim:** 1 to 3: modes. Space: pause (freeze to read the numbers). F: fullscreen.
 
 **Op-amp sim:** 1 to 6: scenes. Space: pause. F: fullscreen. Scene 4: drag the knob to change the gain.
 

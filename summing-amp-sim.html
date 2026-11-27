@@ -1,0 +1,371 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Summing Amplifier</title>
+<style>
+  :root { --bg:#f6f7fb; --panel:#ffffff; --ink:#1a2233; --muted:#5b6478; --accent:#1f6fd6; }
+  * { box-sizing:border-box; }
+  html,body { margin:0; height:100%; background:var(--bg); color:var(--ink);
+    font-family:"Segoe UI", Roboto, Arial, sans-serif; overflow:hidden; }
+  #wrap { position:absolute; inset:0; display:flex; flex-direction:column; }
+  #stage { flex:1; position:relative; }
+  canvas { position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); touch-action:none; }
+  .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; padding:7px 16px;
+    background:var(--panel); border-top:1px solid #dfe3ea; font-size:15px; }
+  .row label { color:var(--muted); }
+  .val { min-width:70px; font-weight:bold; }
+  input[type=range] { width:170px; accent-color:var(--accent); }
+  button { background:#eef1f6; color:var(--ink); border:1px solid #cfd5e0; border-radius:6px;
+    padding:6px 11px; font-size:14px; cursor:pointer; }
+  button:hover { background:#e2e7f0; }
+  button.on { background:#dbe9fb; border-color:#1f6fd6; font-weight:bold; }
+  button.warn { background:#fde2e2; border-color:#d93636; }
+  .sp { flex:1; }
+  .keys { color:var(--muted); font-size:12px; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div id="stage"><canvas id="c"></canvas></div>
+  <div class="row" id="tabs"></div>
+  <div class="row" id="ctl"></div>
+</div>
+<script>
+"use strict";
+// ======================================================================
+// Model: inverting summing amplifier, LM358 on +/-9 V
+// ======================================================================
+const VHI = 7.5, VLO = -8.9, FV = 0.4;
+const sin = Math.sin, TAU = 2 * Math.PI;
+const clipO = v => Math.max(VLO, Math.min(VHI, v));
+const MODES = ["1  Two DC inputs", "2  Sine + DC (Activity 8)", "3  Mixer: two sines"];
+const S = { mode: 1, a: 1.0, b: 2.0, rf: 10 };          // a, b: V1 and V2 setting (DC level or sine peak)
+const R1 = 10, R2 = 10;                                  // kOhm
+const V1 = tt => S.mode === 0 ? S.a : S.a * sin(TAU * FV * tt);
+const V2 = tt => S.mode === 2 ? S.b * sin(TAU * FV * 2.7 * tt + 0.6) : S.b;
+const ideal = tt => -S.rf * (V1(tt) / R1 + V2(tt) / R2);
+const VO = tt => clipO(ideal(tt));
+const C2 = "#8a3ffc";
+
+// ======================================================================
+// Canvas
+// ======================================================================
+const W = 1400, H = 760;
+const cv = document.getElementById("c"), ctx = cv.getContext("2d");
+let scaleS = 1;
+function fit() {
+  const st = document.getElementById("stage");
+  const s = Math.min(st.clientWidth / W, st.clientHeight / H), dpr = window.devicePixelRatio || 1;
+  scaleS = s;
+  cv.style.width = W * s + "px"; cv.style.height = H * s + "px";
+  cv.width = W * s * dpr; cv.height = H * s * dpr; ctx.setTransform(s * dpr, 0, 0, s * dpr, 0, 0);
+}
+window.addEventListener("resize", fit);
+
+const INK = "#1a2233", MUTED = "#5b6478", GRID = "#e1e5ec", WIRE = "#4a5468", OFFC = "#b8bfcc";
+const CIN = "#e07a00", COUT = "#1f6fd6", CM = "#8a3ffc", GOOD = "#18a058", BAD = "#d93636", FB = "#c2185b";
+
+// ---------- text with subscripts: "V_{out}" or "V_d"
+function font(size, weight) { return `${weight} ${size}px Segoe UI, Arial`; }
+function parseRich(str) {
+  const out = []; const rx = /_\{([^}]*)\}|_([A-Za-z0-9+\-−])/g; let pos = 0, m;
+  while ((m = rx.exec(str))) {
+    if (m.index > pos) out.push({ t: str.slice(pos, m.index), s: false });
+    out.push({ t: m[1] !== undefined ? m[1] : m[2], s: true }); pos = rx.lastIndex;
+  }
+  if (pos < str.length) out.push({ t: str.slice(pos), s: false });
+  return out;
+}
+function richWidth(str, size, weight = "normal") {
+  let w = 0;
+  for (const p of parseRich(str)) { ctx.font = font(p.s ? size * 0.66 : size, weight); w += ctx.measureText(p.t).width; }
+  return w;
+}
+function text(str, x, y, size = 16, color = INK, align = "left", weight = "normal") {
+  const segs = parseRich(String(str)), w = richWidth(String(str), size, weight);
+  let cx = align === "center" ? x - w / 2 : align === "right" ? x - w : x;
+  ctx.fillStyle = color; ctx.textBaseline = "middle"; ctx.textAlign = "left";
+  for (const p of segs) {
+    ctx.font = font(p.s ? size * 0.66 : size, weight);
+    ctx.fillText(p.t, cx, p.s ? y + size * 0.3 : y); cx += ctx.measureText(p.t).width;
+  }
+  return cx;
+}
+function poly(pts, color = WIRE, w = 3.5, dash) {
+  ctx.strokeStyle = color; ctx.lineWidth = w; ctx.lineCap = "round"; ctx.lineJoin = "round";
+  ctx.setLineDash(dash || []);
+  ctx.beginPath(); ctx.moveTo(pts[0][0], pts[0][1]); for (const p of pts.slice(1)) ctx.lineTo(p[0], p[1]); ctx.stroke();
+  ctx.setLineDash([]);
+}
+function roundRect(x, y, w, h, r) {
+  ctx.beginPath(); ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath();
+}
+function box(x, y, w, h, fill = "#fff", stroke = "#dfe3ea") {
+  roundRect(x, y, w, h, 12); ctx.fillStyle = fill; ctx.fill(); ctx.strokeStyle = stroke; ctx.lineWidth = 1.5; ctx.stroke();
+}
+function tag(label, x, y, bg, align = "center", fg = "#fff") {
+  const w = richWidth(label, 16, "bold") + 18;
+  const x0 = align === "center" ? x - w / 2 : align === "right" ? x - w : x;
+  roundRect(x0, y - 14, w, 28, 7); ctx.fillStyle = bg; ctx.fill();
+  text(label, x0 + 9, y + 1, 16, fg, "left", "bold");
+}
+function dot(x, y, r = 6, c = INK) { ctx.fillStyle = c; ctx.beginPath(); ctx.arc(x, y, r, 0, TAU); ctx.fill(); }
+function terminal(x, y) { ctx.fillStyle = "#fff"; ctx.strokeStyle = WIRE; ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(x, y, 6, 0, TAU); ctx.fill(); ctx.stroke(); }
+
+// ---------- components
+function zigH(x0, x1, y, color = WIRE) {
+  const n = 6, d = (x1 - x0) / n, pts = [[x0, y]];
+  for (let k = 0; k < n; k++) pts.push([x0 + d * (k + 0.5), y + (k % 2 ? 12 : -12)]);
+  pts.push([x1, y]); poly(pts, color);
+}
+function zigV(x, y0, y1, color = WIRE) {
+  const n = 6, d = (y1 - y0) / n, pts = [[x, y0]];
+  for (let k = 0; k < n; k++) pts.push([x + (k % 2 ? -12 : 12), y0 + d * (k + 0.5)]);
+  pts.push([x, y1]); poly(pts, color);
+}
+function ground(x, y) {
+  poly([[x, y], [x, y + 12]]);
+  for (let k = 0; k < 3; k++) poly([[x - 18 + k * 6, y + 12 + k * 7], [x + 18 - k * 6, y + 12 + k * 7]], WIRE, 3);
+}
+function generator(x, y, r = 26, color = CIN) {
+  ctx.fillStyle = "#fff"; ctx.strokeStyle = color; ctx.lineWidth = 3.5; ctx.beginPath(); ctx.arc(x, y, r, 0, TAU); ctx.fill(); ctx.stroke();
+  ctx.beginPath();
+  for (let k = 0; k <= 30; k++) { const xx = x - r * 0.6 + k * r * 1.2 / 30, yy = y - r * 0.35 * sin(k / 30 * TAU); k ? ctx.lineTo(xx, yy) : ctx.moveTo(xx, yy); }
+  ctx.stroke();
+}
+// Op-amp triangle. Returns the ends of the input leads and the output tip.
+function opamp(cx, cy, o = {}) {
+  const w = o.w || 110, h = o.h || 120, x0 = cx - w / 2, x1 = cx + w / 2;
+  const yTop = cy - h / 4, yBot = cy + h / 4;
+  if (!o.noSupply) {
+    poly([[cx, cy - h / 4], [cx, cy - h / 4 - 24]]); text(o.vp || "+9 V", cx, cy - h / 4 - 36, 14, MUTED, "center");
+    poly([[cx, cy + h / 4], [cx, cy + h / 4 + 24]]); text(o.vn || "−9 V", cx, cy + h / 4 + 36, 14, MUTED, "center");
+  }
+  poly([[x0 - 24, yTop], [x0, yTop]]); poly([[x0 - 24, yBot], [x0, yBot]]);
+  ctx.fillStyle = "#fff"; ctx.strokeStyle = o.color || INK; ctx.lineWidth = 3.5;
+  ctx.beginPath(); ctx.moveTo(x0, cy - h / 2); ctx.lineTo(x1, cy); ctx.lineTo(x0, cy + h / 2); ctx.closePath(); ctx.fill(); ctx.stroke();
+  const top = o.plusTop ? "+" : "−", bot = o.plusTop ? "−" : "+";
+  text(top, x0 + 14, yTop, 24, INK, "center", "bold"); text(bot, x0 + 14, yBot, 24, INK, "center", "bold");
+  if (o.name !== "") text(o.name || "741", x0 + 44, cy, 15, MUTED, "center", "bold");
+  const tp = [x0 - 24, yTop], bp = [x0 - 24, yBot];
+  return { minus: o.plusTop ? bp : tp, plus: o.plusTop ? tp : bp, out: [x1, cy] };
+}
+
+// ---------- moving charge dots along a path (conventional current)
+function mkPath(pts) {
+  let L = 0; const seg = [];
+  for (let k = 1; k < pts.length; k++) { const l = Math.hypot(pts[k][0] - pts[k - 1][0], pts[k][1] - pts[k - 1][1]); seg.push(l); L += l; }
+  return { pts, seg, L, ph: 0 };
+}
+function at(p, s) {
+  s = Math.max(0, Math.min(p.L, s));
+  for (let k = 0; k < p.seg.length; k++) {
+    if (s <= p.seg[k]) { const a = p.pts[k], b = p.pts[k + 1], u = p.seg[k] ? s / p.seg[k] : 0; return [a[0] + (b[0] - a[0]) * u, a[1] + (b[1] - a[1]) * u]; }
+    s -= p.seg[k];
+  }
+  return p.pts[p.pts.length - 1];
+}
+const GAP = 28;
+function flow(p, mA, color, dt) {
+  p.ph += Math.max(-260, Math.min(260, mA * 70)) * dt;
+  if (Math.abs(mA) < 0.004) return;
+  ctx.fillStyle = color; const off = ((p.ph % GAP) + GAP) % GAP;
+  for (let s = off; s < p.L; s += GAP) { const q = at(p, s); ctx.beginPath(); ctx.arc(q[0], q[1], 4.5, 0, TAU); ctx.fill(); }
+}
+
+// ---------- scope: rolling traces over the last WIN seconds
+const WIN = 4;
+function scope(x, y, w, h, o) {
+  box(x, y, w, h);
+  text(o.title, x + 16, y + 24, 18, INK, "left", "bold");
+  const gx = x + 14, gy = y + 46, gw = w - 28, gh = h - 82, nx = 10, ny = 8, vdiv = o.vdiv || 2;
+  ctx.fillStyle = "#fbfcfe"; ctx.fillRect(gx, gy, gw, gh);
+  ctx.strokeStyle = GRID; ctx.lineWidth = 1;
+  for (let i = 0; i <= nx; i++) { ctx.beginPath(); ctx.moveTo(gx + gw * i / nx, gy); ctx.lineTo(gx + gw * i / nx, gy + gh); ctx.stroke(); }
+  for (let j = 0; j <= ny; j++) { ctx.beginPath(); ctx.moveTo(gx, gy + gh * j / ny); ctx.lineTo(gx + gw, gy + gh * j / ny); ctx.stroke(); }
+  ctx.strokeStyle = "#c5ccd8"; ctx.beginPath(); ctx.moveTo(gx, gy + gh / 2); ctx.lineTo(gx + gw, gy + gh / 2); ctx.stroke();
+  const cy = gy + gh / 2, k = (gh / ny) / vdiv;
+  if (o.rails) for (const r of [VSAT, -VSAT]) poly([[gx, cy - r * k], [gx + gw, cy - r * k]], BAD + "88", 1.5, [6, 5]);
+  ctx.save(); ctx.beginPath(); ctx.rect(gx, gy, gw, gh); ctx.clip();
+  for (const tr of o.traces) {
+    ctx.strokeStyle = tr.color; ctx.lineWidth = tr.width || 3; ctx.setLineDash(tr.dash || []);
+    ctx.beginPath();
+    for (let px = 0; px <= gw; px += 1) {
+      const tau = t - WIN + WIN * px / gw, v = tr.f(tau), py = cy - v * k;
+      px ? ctx.lineTo(gx + px, py) : ctx.moveTo(gx + px, py);
+    }
+    ctx.stroke(); ctx.setLineDash([]);
+  }
+  ctx.restore();
+  // legend + scale
+  let lx = gx;
+  for (const tr of o.traces) {
+    if (!tr.label) continue;
+    poly([[lx, gy + gh + 20], [lx + 22, gy + gh + 20]], tr.color, 4, tr.dash);
+    lx = text(tr.label, lx + 28, gy + gh + 20, 15, INK, "left", "bold") + 18;
+  }
+  text(vdiv + " V/div", gx + gw, gy + gh + 20, 13, MUTED, "right");
+}
+function readout(lines, x = 30, y = 610, w = 730, h = 130) {
+  box(x, y, w, h);
+  let yy = y + 30;
+  for (const L of lines) {
+    if (L.pill) { roundRect(x + 14, yy - 20, w - 28, 40, 8); ctx.fillStyle = L.color + "18"; ctx.fill(); }
+    text(L.s, x + (L.pill ? 28 : 22), yy, L.size || 22, L.color || INK, "left", L.weight || "normal");
+    yy += L.gap || 52;
+  }
+}
+function header(title, subtitle) {
+  text(title, 40, 36, 28, INK, "left", "bold");
+}
+
+
+function battery(x, y, v, color) {        // DC source, + on top, drawn between y-22 and y+22
+  poly([[x, y - 40], [x, y - 8]], color); poly([[x, y + 8], [x, y + 40]], color);
+  poly([[x - 20, y - 8], [x + 20, y - 8]], color, 4); poly([[x - 11, y + 8], [x + 11, y + 8]], color, 6);
+  text("+", x + 26, y - 14, 18, color, "left", "bold");
+}
+function source(x, y, isSine, color, label) {
+  if (isSine) { poly([[x, y - 40], [x, y - 26]], color); generator(x, y, 26, color); poly([[x, y + 26], [x, y + 40]], color); }
+  else battery(x, y, 0, color);
+  poly([[x, y + 40], [x, y + 52]]); ground(x, y + 52);
+  text(label, x - 34, y, 20, color, "right", "bold");
+}
+
+// ======================================================================
+// Circuit
+// ======================================================================
+const P = {};
+function layout() {
+  const A = opamp(640, 300, { name: "LM358", vp: "+9 V", vn: "−9 V" });
+  P.A = A; P.yA = A.minus[1]; P.yB = 388; P.nx = 470; P.fy = 140; P.fo = 760;
+  if (!P.p1) {                       // build once so the dots keep their phase
+    P.p1 = mkPath([[110, P.yA], [P.nx, P.yA]]);
+    P.p2 = mkPath([[190, P.yB], [P.nx, P.yB], [P.nx, P.yA]]);
+    P.pf = mkPath([[P.nx, P.yA], [P.nx, P.fy], [P.fo, P.fy], [P.fo, A.out[1]], [860, A.out[1]]]);
+  }
+  return A;
+}
+let lastT = 0;
+function drawCircuit() {
+  const A = layout(), tt = t, dt = t - lastT; lastT = t;
+  const v1 = V1(tt), v2 = V2(tt), i1 = v1 / R1, i2 = v2 / R2, vo = VO(tt);
+  // sources
+  source(110, P.yA + 42, S.mode !== 0, CIN, "V_1");
+  source(190, P.yB + 42, S.mode === 2, C2, "V_2");
+  poly([[110, P.yA + 2], [110, P.yA], [250, P.yA]]); zigH(250, 370, P.yA); poly([[370, P.yA], [P.nx, P.yA], A.minus]);
+  poly([[190, P.yB + 2], [190, P.yB], [250, P.yB]]); zigH(250, 370, P.yB, C2); poly([[370, P.yB], [P.nx, P.yB], [P.nx, P.yA]]);
+  dot(P.nx, P.yA, 7);
+  // feedback
+  poly([[P.nx, P.yA], [P.nx, P.fy], [570, P.fy]]); zigH(570, 670, P.fy, FB); poly([[670, P.fy], [P.fo, P.fy], [P.fo, A.out[1]]]); dot(P.fo, A.out[1]);
+  poly([A.plus, [560, A.plus[1]], [560, A.plus[1] + 18]]); ground(560, A.plus[1] + 18);
+  poly([A.out, [860, A.out[1]]]); terminal(866, A.out[1]);
+  // labels
+  text("R_1 10 kΩ", 310, P.yA - 30, 16, INK, "center", "bold");
+  text("R_2 10 kΩ", 310, P.yB + 32, 16, C2, "center", "bold");
+  text("R_f " + S.rf + " kΩ", 620, P.fy - 30, 16, FB, "center", "bold");
+  text("V_{−} ≈ 0 V", P.nx - 12, P.yA - 26, 15, MUTED, "right", "bold");
+  text("V_{out}", 866, A.out[1] - 32, 20, COUT, "center", "bold");
+  text(vo.toFixed(2) + " V", 866, A.out[1] + 34, 20, COUT, "center", "bold");
+  text((v1 >= 0 ? "+" : "") + v1.toFixed(2) + " V", 76, P.yA + 70, 16, CIN, "right", "bold");
+  text((v2 >= 0 ? "+" : "") + v2.toFixed(2) + " V", 156, P.yB + 70, 16, C2, "right", "bold");
+  // currents: I1 and I2 meet at the node and flow on through Rf together
+  flow(P.p1, i1 * 5, CIN, dt);
+  flow(P.p2, i2 * 5, C2, dt);
+  flow(P.pf, (i1 + i2) * 5, FB, dt);
+  text("I_1 = " + i1.toFixed(2) + " mA", 310, P.yA + 30, 15, CIN, "center", "bold");
+  text("I_2 = " + i2.toFixed(2) + " mA", 310, P.yB - 30, 15, C2, "center", "bold");
+  text("I_f = I_1 + I_2 = " + (i1 + i2).toFixed(2) + " mA", 620, P.fy + 30, 15, FB, "center", "bold");
+}
+
+// ======================================================================
+// Equation panel
+// ======================================================================
+function drawEquation() {
+  const tt = t, v1 = V1(tt), v2 = V2(tt), i1 = v1 / R1, i2 = v2 / R2, id = ideal(tt), vo = VO(tt);
+  box(956, 60, 414, 450);
+  text("Summing amplifier", 976, 88, 20, INK, "left", "bold");
+  text("V_{out} = −R_f (V_1/R_1 + V_2/R_2)", 976, 130, 22, INK, "left", "bold");
+  const f = v => (v >= 0 ? "" : "−") + Math.abs(v).toFixed(2);
+  text("I_1 = " + f(v1) + " V ÷ 10 kΩ = " + f(i1) + " mA", 976, 180, 18, CIN, "left", "bold");
+  text("I_2 = " + f(v2) + " V ÷ 10 kΩ = " + f(i2) + " mA", 976, 214, 18, C2, "left", "bold");
+  text("I_f = I_1 + I_2 = " + f(i1 + i2) + " mA", 976, 248, 18, FB, "left", "bold");
+  text("V_{out} = −I_f × R_f = " + f(id) + " V", 976, 290, 20, COUT, "left", "bold");
+  // short form for equal resistors
+  roundRect(970, 320, 386, 104, 10); ctx.fillStyle = "#eef4fd"; ctx.fill();
+  if (S.rf === 10) {
+    text("R_1 = R_2 = R_f:", 986, 344, 17, MUTED, "left", "bold");
+    text("V_{out} = −(V_1 + V_2)", 986, 374, 22, INK, "left", "bold");
+    text("= −(" + f(v1) + " + " + f(v2) + ") = " + f(-(v1 + v2)) + " V", 986, 406, 19, COUT, "left", "bold");
+  } else {
+    text("R_1 = R_2 = 10 kΩ:", 986, 344, 17, MUTED, "left", "bold");
+    text("V_{out} = −(R_f ÷ 10 kΩ)(V_1 + V_2)", 986, 374, 20, INK, "left", "bold");
+    text("= −" + (S.rf / 10).toFixed(1) + " × (" + f(v1 + v2) + ") = " + f(id) + " V", 986, 406, 19, COUT, "left", "bold");
+  }
+  const clipped = Math.abs(id - vo) > 0.01;
+  roundRect(970, 446, 386, 44, 8); ctx.fillStyle = (clipped ? BAD : GOOD) + "18"; ctx.fill();
+  text(clipped ? "CLIPPING: output stuck at " + vo.toFixed(1) + " V" : (S.mode === 2 ? "TWO SOUNDS MIXED INTO ONE" : "OUTPUT = SUM, INVERTED"),
+    986, 468, 18, clipped ? BAD : GOOD, "left", "bold");
+}
+
+function draw() {
+  text("Summing Amplifier", 40, 30, 28, INK, "left", "bold");
+  drawCircuit();
+  drawEquation();
+  scope(30, 524, 1340, 228, { title: "Scope", vdiv: 2, rails: false, traces: [
+    { f: V1, color: CIN, label: "V_1" }, { f: V2, color: C2, label: "V_2" },
+    { f: VO, color: COUT, label: "V_{out}", width: 3.5 }] });
+}
+
+// ======================================================================
+// Controls
+// ======================================================================
+const ctl = document.getElementById("ctl"), tabs = document.getElementById("tabs");
+let t = 0, paused = false, lastDt = 0;
+function html(s) { return s.replace(/_\{([^}]*)\}/g, "<sub>$1</sub>").replace(/_([a-z0-9]+)/g, "<sub>$1</sub>"); }
+function addSlider(label, min, max, step, value, fn, fmt) {
+  const l = document.createElement("label"); l.innerHTML = html(label);
+  const i = document.createElement("input"); i.type = "range"; i.min = min; i.max = max; i.step = step; i.value = value;
+  const o = document.createElement("span"); o.className = "val"; o.textContent = fmt(+value);
+  i.addEventListener("input", () => { fn(+i.value); o.textContent = fmt(+i.value); });
+  ctl.append(l, i, o);
+}
+function setMode(k) {
+  S.mode = k;
+  if (k === 0) { S.a = 1; S.b = 2; } else if (k === 1) { S.a = 1; S.b = 2; } else { S.a = 2; S.b = 1.5; }
+  build();
+}
+function build() {
+  tabs.innerHTML = ""; ctl.innerHTML = "";
+  MODES.forEach((m, i) => { const b = document.createElement("button"); b.textContent = m; if (i === S.mode) b.classList.add("on"); b.addEventListener("click", () => setMode(i)); tabs.appendChild(b); });
+  const sp = document.createElement("span"); sp.className = "sp"; tabs.appendChild(sp);
+  const pb = document.createElement("button"); pb.id = "pause"; pb.textContent = paused ? "Play (Space)" : "Pause (Space)"; pb.addEventListener("click", togglePause); tabs.appendChild(pb);
+  const ks = document.createElement("span"); ks.className = "keys"; ks.textContent = "1 to 3: modes   Space: pause   F: fullscreen"; tabs.appendChild(ks);
+  const sineA = S.mode !== 0, sineB = S.mode === 2;
+  addSlider(sineA ? "V_1 peak" : "V_1", sineA ? 0 : -5, 5, 0.1, S.a, v => (S.a = v), v => v.toFixed(1) + " V");
+  addSlider(sineB ? "V_2 peak" : "V_2 (pot)", sineB ? 0 : -5, 5, 0.1, S.b, v => (S.b = v), v => v.toFixed(1) + " V");
+  const RF = [10, 22, 47];
+  addSlider("R_f", 0, 2, 1, RF.indexOf(S.rf), k => (S.rf = RF[k]), k => RF[k] + " kΩ");
+}
+function togglePause() { paused = !paused; const b = document.getElementById("pause"); if (b) b.textContent = paused ? "Play (Space)" : "Pause (Space)"; }
+window.addEventListener("keydown", e => {
+  if (e.key >= "1" && e.key <= "3") setMode(+e.key - 1);
+  else if (e.key === " ") { e.preventDefault(); togglePause(); }
+  else if (e.key === "f" || e.key === "F") { if (document.fullscreenElement) document.exitFullscreen(); else document.documentElement.requestFullscreen(); }
+});
+
+let last = performance.now();
+function frame(now) {
+  const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  if (!paused) t += dt;
+  ctx.fillStyle = "#f6f7fb"; ctx.fillRect(0, 0, W, H);
+  draw();
+  requestAnimationFrame(frame);
+}
+build(); fit(); requestAnimationFrame(frame);
+</script>
+</body>
+</html>
